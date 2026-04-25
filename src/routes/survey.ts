@@ -12,7 +12,6 @@ import { Language, InterviewSession, DimensionKey } from "../types";
 import { getDimension } from "../dimensions";
 import { getProject } from "../store";
 import { speechToText, textToSpeech, TTSOptions } from "../voice";
-import * as path from "path";
 
 const router = Router();
 
