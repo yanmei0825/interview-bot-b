@@ -58,6 +58,25 @@ function isHallucination(text: string): boolean {
   return WHISPER_HALLUCINATIONS.has(normalized);
 }
 
+function detectScript(text: string): Language | null {
+  const clean = text.replace(/\s+/g, "");
+  if (!clean.length) return null;
+  const cyrillic = (clean.match(/[а-яёА-ЯЁ]/g) ?? []).length;
+  const turkish  = (clean.match(/[çğışöüÇĞİŞÖÜ]/g) ?? []).length;
+  const latin    = (clean.match(/[a-zA-Z]/g) ?? []).length;
+  const total    = cyrillic + turkish + latin;
+  if (!total) return null;
+  if (cyrillic / total >= 0.3) return "ru";
+  if (turkish  / total >= 0.3) return "tr";
+  if (latin    / total >= 0.3) return "en";
+  return null;
+}
+
+function isWrongLanguage(text: string, expected: Language): boolean {
+  const detected = detectScript(text);
+  return detected !== null && detected !== expected;
+}
+
 export async function speechToText(
   audioBuffer: ArrayBuffer,
   language: Language
@@ -79,7 +98,7 @@ export async function speechToText(
   });
 
   return {
-    text: (response.text && !isHallucination(response.text)) ? response.text : "",
+    text: (response.text && !isHallucination(response.text) && !isWrongLanguage(response.text, language)) ? response.text : "",
     confidence: 0.95,
     language,
     duration: (audioBuffer.byteLength / 32000) * 1000,
