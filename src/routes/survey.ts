@@ -46,41 +46,45 @@ router.post("/public-session", async (req: Request, res: Response) => {
 router.post("/:token/voice/transcribe", requireSession, requireLanguage, async (req: Request, res: Response) => {
   const session = res.locals["session"] as InterviewSession;
 
-  // Read raw body
-  const audioBuffer: Buffer = await new Promise((resolve, reject) => {
-    if (Buffer.isBuffer(req.body) && req.body.length > 0) {
-      console.log("[Transcribe] body from express.raw, size:", req.body.length);
-      return resolve(req.body);
-    }
-    console.log("[Transcribe] reading from stream, body type:", typeof req.body, "content-type:", req.headers["content-type"]);
-    const chunks: Buffer[] = [];
-    req.on("data", (chunk: Buffer) => chunks.push(chunk));
-    req.on("end", () => {
-      const buf = Buffer.concat(chunks);
-      console.log("[Transcribe] stream read complete, size:", buf.length);
-      resolve(buf);
-    });
-    req.on("error", reject);
-  });
-
-  if (!audioBuffer || audioBuffer.length === 0) {
-    return res.status(400).json({ error: "No audio provided" });
-  }
-
-  // Try transcription — on failure return empty text so frontend falls back to __skip__
-  let text = "";
   try {
-    const result = await speechToText(audioBuffer as unknown as ArrayBuffer, session.language!);
-    text = result.text ?? "";
-    await logEvent(session.token, "voice_transcribed", text.slice(0, 80), session.currentDimension);
-    session.history.push({ role: "user", content: text, timestamp: Date.now() });
-    await saveSession(session);
-  } catch (err: any) {
-    console.error("[Voice Transcribe Error]", err?.message ?? err, err?.stack);
-    // Return empty text — frontend will treat this as __skip__
-  }
+    // Read raw body
+    const audioBuffer: Buffer = await new Promise((resolve, reject) => {
+      if (Buffer.isBuffer(req.body) && req.body.length > 0) {
+        console.log("[Transcribe] body from express.raw, size:", req.body.length);
+        return resolve(req.body);
+      }
+      console.log("[Transcribe] reading from stream, body type:", typeof req.body, "content-type:", req.headers["content-type"]);
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer) => chunks.push(chunk));
+      req.on("end", () => {
+        const buf = Buffer.concat(chunks);
+        console.log("[Transcribe] stream read complete, size:", buf.length);
+        resolve(buf);
+      });
+      req.on("error", reject);
+    });
 
-  res.json({ text, confidence: 0.95, language: session.language, duration: 0 });
+    if (!audioBuffer || audioBuffer.length === 0) {
+      return res.status(400).json({ error: "No audio provided" });
+    }
+
+    let text = "";
+    try {
+      const result = await speechToText(audioBuffer as unknown as ArrayBuffer, session.language!);
+      text = result.text ?? "";
+      await logEvent(session.token, "voice_transcribed", text.slice(0, 80), session.currentDimension);
+      session.history.push({ role: "user", content: text, timestamp: Date.now() });
+      await saveSession(session);
+    } catch (err: any) {
+      console.error("[Voice Transcribe Error]", err?.message ?? err, err?.stack);
+      // Return empty text — frontend will treat this as __skip__
+    }
+
+    return res.json({ text, confidence: 0.95, language: session.language, duration: 0 });
+  } catch (err: any) {
+    console.error("[Transcribe] Unhandled error:", err?.message ?? err);
+    return res.json({ text: "", confidence: 0, language: session.language, duration: 0 });
+  }
 });
 
 router.post("/:token/voice/speak/stream", requireSession, requireLanguage, async (req: Request, res: Response) => {
