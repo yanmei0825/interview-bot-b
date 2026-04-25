@@ -133,62 +133,6 @@ export function classifyInput(text: string, lang: Language): InputType {
   return "valid_answer";
 }
 
-function fingerprint(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[^a-zа-яёçğışöü\s]/gi, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .split(" ")
-    .slice(0, 6)
-    .join(" ");
-}
-
-export function isDuplicateQuestion(
-  candidate: string,
-  history: { role: "assistant" | "user"; content: string }[]
-): boolean {
-  const assistantMessages = history.filter((m) => m.role === "assistant").map((m) => m.content);
-  
-  if (assistantMessages.length === 0) return false;
-
-  const candidateLower = candidate.toLowerCase().trim();
-  const candidateFp = fingerprint(candidate);
-
-  for (const prevQuestion of assistantMessages) {
-    const prevLower = prevQuestion.toLowerCase().trim();
-    const prevFp = fingerprint(prevQuestion);
-
-    if (!candidateFp || !prevFp) continue;
-
-    if (candidateFp === prevFp) return true;
-
-    if (candidateLower === prevLower) return true;
-
-    const candidatePrefix = candidateLower.slice(0, 40);
-    const prevPrefix = prevLower.slice(0, 40);
-    if (candidatePrefix === prevPrefix) return true;
-
-    const candidateWords = candidateLower
-      .replace(/[^a-zа-яёçğışöü\s]/gi, "")
-      .split(/\s+/)
-      .filter((w) => w.length > 4);
-    
-    const prevWords = prevLower
-      .replace(/[^a-zа-яёçғışöü\s]/gi, "")
-      .split(/\s+/)
-      .filter((w) => w.length > 4);
-
-    if (candidateWords.length > 0 && prevWords.length > 0) {
-      const commonWords = candidateWords.filter((w) => prevWords.includes(w));
-      const similarity = commonWords.length / Math.max(candidateWords.length, prevWords.length);
-      if (similarity > 0.7) return true;
-    }
-  }
-
-  return false;
-}
-
 type GuardPool = Record<Language, string[]>;
 
 const GUARD_POOLS: Record<InputType, GuardPool> = {

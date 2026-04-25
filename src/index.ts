@@ -20,7 +20,6 @@ app.use((req, _res, next) => {
 });
 app.use(express.json());
 app.use("/survey/:token/voice/transcribe", express.raw({ type: "audio/*", limit: "50mb" }));
-app.use("/survey/:token/voice/send", express.raw({ type: "audio/*", limit: "50mb" }));
 
 // Init DB + seed on first request (lazy, safe for serverless cold starts)
 let initialized = false;

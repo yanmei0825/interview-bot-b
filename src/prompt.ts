@@ -1,17 +1,7 @@
-import { Language, DimensionKey } from "./types";
+import { DimensionKey } from "./types";
 
 export const MAX_REPLY_TOKENS = 150;
 
-// Estimates token count for multilingual text (Cyrillic/Turkish use more tokens per char)
-export function estimateTokens(text: string): number {
-  const cyrillicCount = (text.match(/[а-яёА-ЯЁ]/g) ?? []).length;
-  const turkishCount = (text.match(/[çğışöüÇĞİŞÖÜ]/g) ?? []).length;
-  const nonLatinRatio = (cyrillicCount + turkishCount) / Math.max(text.length, 1);
-  const charsPerToken = nonLatinRatio > 0.3 ? 3 : 4;
-  return Math.ceil(text.length / charsPerToken);
-}
-
-// Signal keywords per dimension, covering all three interview languages
 const SIGNAL_KEYWORDS: Record<DimensionKey, string[]> = {
   D1: [
     "proud","pride","achievement","win","success","result","accomplished","delivered","nailed","milestone",
@@ -65,7 +55,6 @@ const SIGNAL_KEYWORDS: Record<DimensionKey, string[]> = {
   ],
 };
 
-// Extracts dimension-relevant signal keywords from a user response
 export function extractSignals(text: string, dim: DimensionKey): string[] {
   const lower = text.toLowerCase();
   return (SIGNAL_KEYWORDS[dim] ?? []).filter((kw) => lower.includes(kw.toLowerCase()));
@@ -85,7 +74,6 @@ const NEGATIVE_WORDS = [
   "kötü","nefret","yorgun","stres","adaletsiz","görmezden","tükenme","toksik","yalnız","anlamsız",
 ];
 
-// Detects overall sentiment of a user response
 export function detectSentiment(text: string): Sentiment {
   const lower = text.toLowerCase();
   const pos = POSITIVE_WORDS.filter((w) => lower.includes(w)).length;
@@ -95,7 +83,6 @@ export function detectSentiment(text: string): Sentiment {
   return "neutral";
 }
 
-// Parses LLM output — expects {"question": "..."} JSON, falls back to raw text
 export function parseLLMOutput(raw: string): string {
   const trimmed = raw.trim();
   try {
@@ -108,7 +95,6 @@ export function parseLLMOutput(raw: string): string {
   return "";
 }
 
-// Returns true if the reply is a near-duplicate of any previous assistant message
 export function isReplyDuplicate(
   reply: string,
   history: { role: string; content: string }[]

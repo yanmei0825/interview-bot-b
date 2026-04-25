@@ -1,5 +1,4 @@
 import { Language } from "./types";
-import { ProxyAgent } from "undici";
 import OpenAI from "openai";
 import { toFile } from "openai";
 
@@ -28,15 +27,16 @@ function getOpenAIClient(): OpenAI {
   if (!apiKey) throw new Error("OPENAI_API_KEY is not configured.");
 
   const proxyUrl = process.env.PROXY_URL;
-  const proxyAgent = proxyUrl ? new ProxyAgent(proxyUrl) : null;
+  let proxyFetch: OpenAI["fetch"] | undefined;
+  if (proxyUrl) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { ProxyAgent } = require("undici") as { ProxyAgent: typeof import("undici").ProxyAgent };
+    const agent = new ProxyAgent(proxyUrl);
+    proxyFetch = (url: string, options?: RequestInit) =>
+      fetch(url, { ...(options as any), duplex: "half", dispatcher: agent } as any);
+  }
 
-  return new OpenAI({
-    apiKey,
-    fetch: proxyAgent
-      ? (url: string, options?: RequestInit) =>
-          fetch(url, { ...(options as any), duplex: "half", dispatcher: proxyAgent } as any)
-      : undefined,
-  });
+  return new OpenAI({ apiKey, fetch: proxyFetch });
 }
 
 export async function speechToText(

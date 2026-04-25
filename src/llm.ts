@@ -1,5 +1,4 @@
 import OpenAI from "openai";
-import { ProxyAgent } from "undici";
 import { InterviewSession } from "./types";
 import { parseLLMOutput, isReplyDuplicate, MAX_REPLY_TOKENS } from "./prompt";
 import { buildSystemPrompt, buildUserMessage, buildLLMInput } from "./llm-prompt";
@@ -38,15 +37,19 @@ function getOpenAIClient(): OpenAI {
   if (!apiKey) throw new Error("OPENAI_API_KEY is not configured.");
 
   const proxyUrl = process.env.PROXY_URL;
-  const proxyAgent = proxyUrl ? new ProxyAgent(proxyUrl) : null;
+  let proxyFetch: OpenAI["fetch"] | undefined;
+  if (proxyUrl) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { ProxyAgent } = require("undici") as { ProxyAgent: typeof import("undici").ProxyAgent };
+    const agent = new ProxyAgent(proxyUrl);
+    proxyFetch = (url: string, options?: RequestInit) =>
+      fetch(url, { ...(options as any), duplex: "half", dispatcher: agent } as any);
+  }
 
   openaiClient = new OpenAI({
     apiKey,
     baseURL: process.env.LLM_BASE_URL ?? "https://api.openai.com/v1",
-    fetch: proxyAgent
-      ? (url: string, options?: RequestInit) =>
-          fetch(url, { ...(options as any), duplex: "half", dispatcher: proxyAgent } as any)
-      : undefined,
+    fetch: proxyFetch,
   });
 
   return openaiClient;
