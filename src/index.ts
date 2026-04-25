@@ -24,11 +24,16 @@ app.use(express.raw({ type: "audio/*", limit: "50mb" }));
 
 // Init DB + seed on first request (lazy, safe for serverless cold starts)
 let initialized = false;
-app.use(async (_req, _res, next) => {
+app.use(async (_req, res, next) => {
   if (!initialized) {
-    await initDb();
-    await seedDefaultProject();
-    initialized = true;
+    try {
+      await initDb();
+      await seedDefaultProject();
+      initialized = true;
+    } catch (err: any) {
+      console.error("[init] DB init failed:", err?.message);
+      return res.status(500).json({ error: "DB init failed", detail: err?.message });
+    }
   }
   next();
 });
