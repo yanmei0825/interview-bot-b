@@ -46,11 +46,24 @@ router.post("/public-session", async (req: Request, res: Response) => {
 router.post("/:token/voice/transcribe", requireSession, requireLanguage, async (req: Request, res: Response) => {
   try {
     const session = res.locals["session"] as InterviewSession;
-    const audioBuffer = req.body;
-    if (!audioBuffer || (Buffer.isBuffer(audioBuffer) && audioBuffer.length === 0)) {
+
+    // Read raw body from stream directly — works reliably on Vercel serverless
+    const audioBuffer: Buffer = await new Promise((resolve, reject) => {
+      // If express.raw() already parsed it, use that
+      if (Buffer.isBuffer(req.body) && req.body.length > 0) {
+        return resolve(req.body);
+      }
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer) => chunks.push(chunk));
+      req.on("end", () => resolve(Buffer.concat(chunks)));
+      req.on("error", reject);
+    });
+
+    if (!audioBuffer || audioBuffer.length === 0) {
       return res.status(400).json({ error: "No audio provided" });
     }
-    const result = await speechToText(audioBuffer, session.language!);
+
+    const result = await speechToText(audioBuffer as unknown as ArrayBuffer, session.language!);
     await logEvent(session.token, "voice_transcribed", result.text.slice(0, 80), session.currentDimension);
     session.history.push({ role: "user", content: result.text, timestamp: Date.now() });
     await saveSession(session);
@@ -79,9 +92,8 @@ router.post("/:token/voice/speak/stream", requireSession, requireLanguage, async
       audioBuffer = result.audioBuffer;
       mimeType = result.mimeType;
     } catch (err: any) {
-      console.error("[Voice Speak] TTS failed, using silent fallback:", err.message);
-      audioBuffer = Buffer.from([0xFF, 0xFB, 0x90, 0x00, ...new Array(172).fill(0x00)]).buffer;
-      mimeType = "audio/mpeg";
+      console.error("[Voice Speak] TTS failed:", err.message);
+      return res.status(503).json({ error: "TTS unavailable" });
     }
 
     await logEvent(session.token, "voice_generated_stream", text.slice(0, 80));
