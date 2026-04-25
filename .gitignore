@@ -1,7 +1,6 @@
 dist
 node_modules
 .env
-data/interview.db
-data/interview.db-shm
-data/interview.db-wal
+data/
+voice_files/
 package-lock.json

@@ -6,27 +6,26 @@ import { getAllSessionsByProject } from "../session";
 
 const router = Router();
 
-router.post("/", (req: Request, res: Response) => {
+router.post("/", async (req: Request, res: Response) => {
   const { name } = req.body as { name?: string };
   if (!name) return res.status(400).json({ error: "name is required" });
-
-  const company = createCompany(name);
+  const company = await createCompany(name);
   return res.status(201).json(company);
 });
 
-router.get("/", (_req: Request, res: Response) => {
-  return res.json(listCompanies());
+router.get("/", async (_req: Request, res: Response) => {
+  return res.json(await listCompanies());
 });
 
-router.get("/:id", (req: Request, res: Response) => {
-  const company = getCompany(String(req.params["id"]));
+router.get("/:id", async (req: Request, res: Response) => {
+  const company = await getCompany(String(req.params["id"]));
   if (!company) return res.status(404).json({ error: "Company not found" });
   return res.json(company);
 });
 
-router.post("/:id/projects", (req: Request, res: Response) => {
+router.post("/:id/projects", async (req: Request, res: Response) => {
   const companyId = String(req.params["id"]);
-  const company = getCompany(companyId);
+  const company = await getCompany(companyId);
   if (!company) return res.status(404).json({ error: "Company not found" });
 
   const { name, description, demographicsEnabled, allowedLanguages } = req.body as {
@@ -35,83 +34,67 @@ router.post("/:id/projects", (req: Request, res: Response) => {
     demographicsEnabled?: boolean;
     allowedLanguages?: Language[];
   };
-
   if (!name) return res.status(400).json({ error: "name is required" });
 
-  const project = createProject(companyId, name, {
+  const project = await createProject(companyId, name, {
     ...(description !== undefined && { description }),
     ...(demographicsEnabled !== undefined && { demographicsEnabled }),
     ...(allowedLanguages !== undefined && { allowedLanguages }),
   });
-
   return res.status(201).json(project);
 });
 
-router.get("/:id/projects", (req: Request, res: Response) => {
+router.get("/:id/projects", async (req: Request, res: Response) => {
   const companyId = String(req.params["id"]);
-  if (!getCompany(companyId)) return res.status(404).json({ error: "Company not found" });
-
-  return res.json(listProjectsByCompany(companyId));
+  if (!await getCompany(companyId)) return res.status(404).json({ error: "Company not found" });
+  return res.json(await listProjectsByCompany(companyId));
 });
 
-router.get("/:id/projects/:projectId", (req: Request, res: Response) => {
-  const project = getProject(String(req.params["projectId"]));
+router.get("/:id/projects/:projectId", async (req: Request, res: Response) => {
+  const project = await getProject(String(req.params["projectId"]));
   if (!project || project.companyId !== String(req.params["id"])) {
     return res.status(404).json({ error: "Project not found" });
   }
   return res.json(project);
 });
 
-router.get("/:id/projects/:projectId/report", (req: Request, res: Response) => {
+router.get("/:id/projects/:projectId/report", async (req: Request, res: Response) => {
   const projectId = String(req.params["projectId"]);
-  const project = getProject(projectId);
+  const project = await getProject(projectId);
   if (!project || project.companyId !== String(req.params["id"])) {
     return res.status(404).json({ error: "Project not found" });
   }
-
-  const report = generateProjectReport(projectId);
-  return res.json(report);
+  return res.json(await generateProjectReport(projectId));
 });
 
-router.get("/:id/projects/:projectId/sessions", (req: Request, res: Response) => {
+router.get("/:id/projects/:projectId/sessions", async (req: Request, res: Response) => {
   const projectId = String(req.params["projectId"]);
-  const project = getProject(projectId);
+  const project = await getProject(projectId);
   if (!project || project.companyId !== String(req.params["id"])) {
     return res.status(404).json({ error: "Project not found" });
   }
-
-  const sessions = getAllSessionsByProject(projectId).map((s) => ({
-    token: s.token,
-    language: s.language,
-    finished: s.finished,
-    turnCount: s.turnCount,
-    demographics: s.demographics,
-    createdAt: s.createdAt,
-    lastActivityAt: s.lastActivityAt,
+  const sessions = (await getAllSessionsByProject(projectId)).map((s) => ({
+    token: s.token, language: s.language, finished: s.finished,
+    turnCount: s.turnCount, demographics: s.demographics,
+    createdAt: s.createdAt, lastActivityAt: s.lastActivityAt,
   }));
-
   return res.json(sessions);
 });
 
-
-router.get("/:id/projects/:projectId/comparison", (req: Request, res: Response) => {
+router.get("/:id/projects/:projectId/comparison", async (req: Request, res: Response) => {
   const projectId = String(req.params["projectId"]);
-  const project = getProject(projectId);
+  const project = await getProject(projectId);
   if (!project || project.companyId !== String(req.params["id"])) {
     return res.status(404).json({ error: "Project not found" });
   }
-
-  const analysis = generateComparisonAnalysis(projectId);
-  return res.json(analysis);
+  return res.json(await generateComparisonAnalysis(projectId));
 });
 
-router.get("/:id/report", (req: Request, res: Response) => {
+router.get("/:id/report", async (req: Request, res: Response) => {
   const companyId = String(req.params["id"]);
-  const company = getCompany(companyId);
+  const company = await getCompany(companyId);
   if (!company) return res.status(404).json({ error: "Company not found" });
-
-  const report = generateCompanyReport(companyId);
-  return res.json(report);
+  return res.json(await generateCompanyReport(companyId));
 });
 
 export default router;

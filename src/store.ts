@@ -1,23 +1,27 @@
 import { v4 as uuidv4 } from "uuid";
 import { Company, Project, Language } from "./types";
-import db from "./db";
+import { getDb } from "./db";
 
-export function createCompany(name: string, id?: string): Company {
+export async function createCompany(name: string, id?: string): Promise<Company> {
   const company: Company = { id: id ?? uuidv4(), name, createdAt: Date.now() };
-  db.prepare("INSERT OR REPLACE INTO companies (id, name, createdAt) VALUES (?, ?, ?)")
-    .run(company.id, company.name, company.createdAt);
+  await getDb().execute({
+    sql: "INSERT OR REPLACE INTO companies (id, name, createdAt) VALUES (?, ?, ?)",
+    args: [company.id, company.name, company.createdAt],
+  });
   return company;
 }
 
-export function getCompany(id: string): Company | undefined {
-  return db.prepare("SELECT * FROM companies WHERE id = ?").get(id) as Company | undefined;
+export async function getCompany(id: string): Promise<Company | undefined> {
+  const result = await getDb().execute({ sql: "SELECT * FROM companies WHERE id = ?", args: [id] });
+  return result.rows[0] as unknown as Company | undefined;
 }
 
-export function listCompanies(): Company[] {
-  return db.prepare("SELECT * FROM companies ORDER BY createdAt DESC").all() as Company[];
+export async function listCompanies(): Promise<Company[]> {
+  const result = await getDb().execute("SELECT * FROM companies ORDER BY createdAt DESC");
+  return result.rows as unknown as Company[];
 }
 
-export function createProject(
+export async function createProject(
   companyId: string,
   name: string,
   opts: {
@@ -26,7 +30,7 @@ export function createProject(
     demographicsEnabled?: boolean;
     allowedLanguages?: Language[];
   } = {}
-): Project {
+): Promise<Project> {
   const project: Project = {
     id: opts.id ?? uuidv4(),
     companyId,
@@ -36,36 +40,41 @@ export function createProject(
     createdAt: Date.now(),
     ...(opts.description !== undefined && { description: opts.description }),
   };
-  db.prepare(`
-    INSERT OR REPLACE INTO projects (id, companyId, name, description, demographicsEnabled, allowedLanguages, createdAt)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    project.id,
-    project.companyId,
-    project.name,
-    project.description ?? null,
-    project.demographicsEnabled ? 1 : 0,
-    JSON.stringify(project.allowedLanguages),
-    project.createdAt
-  );
+  await getDb().execute({
+    sql: `INSERT OR REPLACE INTO projects (id, companyId, name, description, demographicsEnabled, allowedLanguages, createdAt)
+          VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    args: [
+      project.id,
+      project.companyId,
+      project.name,
+      project.description ?? null,
+      project.demographicsEnabled ? 1 : 0,
+      JSON.stringify(project.allowedLanguages),
+      project.createdAt,
+    ],
+  });
   return project;
 }
 
-export function getProject(id: string): Project | undefined {
-  const row = db.prepare("SELECT * FROM projects WHERE id = ?").get(id) as any;
+export async function getProject(id: string): Promise<Project | undefined> {
+  const result = await getDb().execute({ sql: "SELECT * FROM projects WHERE id = ?", args: [id] });
+  const row = result.rows[0] as any;
   if (!row) return undefined;
   return {
     ...row,
     demographicsEnabled: row.demographicsEnabled === 1,
-    allowedLanguages: JSON.parse(row.allowedLanguages),
+    allowedLanguages: JSON.parse(row.allowedLanguages as string),
   } as Project;
 }
 
-export function listProjectsByCompany(companyId: string): Project[] {
-  const rows = db.prepare("SELECT * FROM projects WHERE companyId = ? ORDER BY createdAt DESC").all(companyId) as any[];
-  return rows.map(row => ({
+export async function listProjectsByCompany(companyId: string): Promise<Project[]> {
+  const result = await getDb().execute({
+    sql: "SELECT * FROM projects WHERE companyId = ? ORDER BY createdAt DESC",
+    args: [companyId],
+  });
+  return (result.rows as any[]).map((row) => ({
     ...row,
     demographicsEnabled: row.demographicsEnabled === 1,
-    allowedLanguages: JSON.parse(row.allowedLanguages),
+    allowedLanguages: JSON.parse(row.allowedLanguages as string),
   }));
 }

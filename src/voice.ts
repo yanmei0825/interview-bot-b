@@ -1,5 +1,7 @@
 import { Language } from "./types";
 import { ProxyAgent } from "undici";
+import OpenAI from "openai";
+import { toFile } from "openai";
 
 export interface TTSOptions {
   speed?: number;
@@ -21,49 +23,38 @@ export interface TTSResult {
   language: Language;
 }
 
-function getProxyFetch() {
+function getOpenAIClient(): OpenAI {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("OPENAI_API_KEY is not configured.");
+
   const proxyUrl = process.env.PROXY_URL;
-  if (!proxyUrl) return undefined;
-  const agent = new ProxyAgent(proxyUrl);
-  return (url: string, options?: RequestInit) =>
-    fetch(url, { ...(options as any), dispatcher: agent } as any);
+  const proxyAgent = proxyUrl ? new ProxyAgent(proxyUrl) : null;
+
+  return new OpenAI({
+    apiKey,
+    fetch: proxyAgent
+      ? (url: string, options?: RequestInit) =>
+          fetch(url, { ...(options as any), duplex: "half", dispatcher: proxyAgent } as any)
+      : undefined,
+  });
 }
 
 export async function speechToText(
   audioBuffer: ArrayBuffer,
   language: Language
 ): Promise<STTResult> {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error("OPENAI_API_KEY is not configured.");
+  const client = getOpenAIClient();
 
-  // form-data is needed because fetch's FormData doesn't support Buffer filenames
-  const FormData = require("form-data");
-  const form = new FormData();
-  form.append("file", Buffer.from(audioBuffer), { filename: "audio.webm" });
-  form.append("model", "whisper-1");
-  form.append("language", language);
+  const file = await toFile(Buffer.from(audioBuffer), "audio.webm", { type: "audio/webm" });
 
-  const proxyFetch = getProxyFetch();
-  const doFetch = proxyFetch ?? fetch;
+  const response = await client.audio.transcriptions.create({
+    file,
+    model: "whisper-1",
+    language,
+  });
 
-  const response = await doFetch("https://api.openai.com/v1/audio/transcriptions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      ...form.getHeaders(),
-    },
-    body: form,
-  } as any);
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error("[STT Error]", response.status, errorText);
-    throw new Error(`Whisper STT failed: ${response.status}`);
-  }
-
-  const data = (await response.json()) as { text: string };
   return {
-    text: data.text ?? "",
+    text: response.text ?? "",
     confidence: 0.95,
     language,
     duration: (audioBuffer.byteLength / 32000) * 1000,
@@ -76,32 +67,16 @@ export async function textToSpeech(
   language: Language,
   options: TTSOptions = {}
 ): Promise<TTSResult> {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error("OPENAI_API_KEY is not configured.");
+  const client = getOpenAIClient();
 
-  const voice = options.voiceGender === "male" ? "onyx" : "nova";
-  const proxyFetch = getProxyFetch();
-  const doFetch = proxyFetch ?? fetch;
+  const voice = options.voiceGender === "male" ? "onyx" : ("nova" as const);
 
-  const response = await doFetch("https://api.openai.com/v1/audio/speech", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "tts-1",
-      input: text,
-      voice,
-      speed: options.speed ?? 1,
-    }),
-  } as any);
-
-  if (!response.ok) {
-    const error = await response.text();
-    console.error(`[TTS Error] ${response.status}: ${error}`);
-    throw new Error(`OpenAI TTS failed: ${response.status}`);
-  }
+  const response = await client.audio.speech.create({
+    model: "tts-1",
+    input: text,
+    voice,
+    speed: options.speed ?? 1,
+  });
 
   const audioBuffer = await response.arrayBuffer();
   if (audioBuffer.byteLength === 0) {

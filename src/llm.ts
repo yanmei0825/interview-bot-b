@@ -45,7 +45,7 @@ function getOpenAIClient(): OpenAI {
     baseURL: process.env.LLM_BASE_URL ?? "https://api.openai.com/v1",
     fetch: proxyAgent
       ? (url: string, options?: RequestInit) =>
-          fetch(url, { ...(options as any), dispatcher: proxyAgent } as any)
+          fetch(url, { ...(options as any), duplex: "half", dispatcher: proxyAgent } as any)
       : undefined,
   });
 

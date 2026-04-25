@@ -1,15 +1,12 @@
 import { v4 as uuidv4 } from "uuid";
 import {
   InterviewSession,
-  InterviewState,
   Language,
   DimensionKey,
-  Demographics,
   InterviewEvent,
 } from "./types";
 import { DIMENSION_ORDER, getDimension } from "./dimensions";
-import db from "./db";
-
+import { getDb } from "./db";
 
 function initCoverage(): InterviewSession["coverage"] {
   const coverage = {} as InterviewSession["coverage"];
@@ -27,7 +24,6 @@ function deserializeSession(data: string): InterviewSession {
   return JSON.parse(data) as InterviewSession;
 }
 
-
 export function computeDimensionMetrics(
   turnCount: number,
   minTurns: number,
@@ -40,10 +36,10 @@ export function computeDimensionMetrics(
   return { depthLevel, coverageScore };
 }
 
-export function createSession(
+export async function createSession(
   projectId: string,
   demographicsEnabled: boolean
-): InterviewSession {
+): Promise<InterviewSession> {
   const token = uuidv4();
   const session: InterviewSession = {
     token,
@@ -65,31 +61,41 @@ export function createSession(
     createdAt: Date.now(),
     lastActivityAt: Date.now(),
   };
-  db.prepare("INSERT INTO sessions (token, data, lastActivityAt) VALUES (?, ?, ?)")
-    .run(token, serializeSession(session), session.lastActivityAt);
+  await getDb().execute({
+    sql: "INSERT INTO sessions (token, data, lastActivityAt) VALUES (?, ?, ?)",
+    args: [token, serializeSession(session), session.lastActivityAt],
+  });
   return session;
 }
 
-export function getSession(token: string): InterviewSession | undefined {
-  const row = db.prepare("SELECT data FROM sessions WHERE token = ?").get(token) as { data: string } | undefined;
+export async function getSession(token: string): Promise<InterviewSession | undefined> {
+  const result = await getDb().execute({
+    sql: "SELECT data FROM sessions WHERE token = ?",
+    args: [token],
+  });
+  const row = result.rows[0] as { data: string } | undefined;
   if (!row) return undefined;
-  return deserializeSession(row.data);
+  return deserializeSession(row.data as string);
 }
 
-export function saveSession(session: InterviewSession): void {
+export async function saveSession(session: InterviewSession): Promise<void> {
   session.lastActivityAt = Date.now();
-  db.prepare("UPDATE sessions SET data = ?, lastActivityAt = ? WHERE token = ?")
-    .run(serializeSession(session), session.lastActivityAt, session.token);
+  await getDb().execute({
+    sql: "UPDATE sessions SET data = ?, lastActivityAt = ? WHERE token = ?",
+    args: [serializeSession(session), session.lastActivityAt, session.token],
+  });
 }
 
-export function logEvent(
+export async function logEvent(
   token: string,
   event: string,
   detail?: string,
   dimension?: DimensionKey
-): void {
-  db.prepare("INSERT INTO events (token, event, dimension, detail, timestamp) VALUES (?, ?, ?, ?, ?)")
-    .run(token, event, dimension ?? null, detail ?? null, Date.now());
+): Promise<void> {
+  await getDb().execute({
+    sql: "INSERT INTO events (token, event, dimension, detail, timestamp) VALUES (?, ?, ?, ?, ?)",
+    args: [token, event, dimension ?? null, detail ?? null, Date.now()],
+  });
 }
 
 export function advanceDimension(session: InterviewSession): boolean {
@@ -154,27 +160,31 @@ export function getSessionSummary(session: InterviewSession) {
   };
 }
 
-export function getAllSessionsByProject(projectId: string): InterviewSession[] {
-  const rows = db.prepare(
-    "SELECT data FROM sessions WHERE json_extract(data, '$.projectId') = ?"
-  ).all(projectId) as { data: string }[];
-  return rows.map((r) => deserializeSession(r.data));
+export async function getAllSessionsByProject(projectId: string): Promise<InterviewSession[]> {
+  const result = await getDb().execute({
+    sql: "SELECT data FROM sessions WHERE json_extract(data, '$.projectId') = ?",
+    args: [projectId],
+  });
+  return (result.rows as unknown as { data: string }[]).map((r) => deserializeSession(r.data));
 }
 
-export function getEvents(): InterviewEvent[] {
-  return db.prepare("SELECT token, event, dimension, detail, timestamp FROM events ORDER BY timestamp DESC LIMIT 1000")
-    .all() as InterviewEvent[];
+export async function getEvents(): Promise<InterviewEvent[]> {
+  const result = await getDb().execute(
+    "SELECT token, event, dimension, detail, timestamp FROM events ORDER BY timestamp DESC LIMIT 1000"
+  );
+  return result.rows as unknown as InterviewEvent[];
 }
 
-export function getEventsByProject(projectId: string): InterviewEvent[] {
-  return db.prepare(`
-    SELECT e.token, e.event, e.dimension, e.detail, e.timestamp
-    FROM events e
-    WHERE json_extract((SELECT data FROM sessions WHERE token = e.token), '$.projectId') = ?
-    ORDER BY e.timestamp DESC
-  `).all(projectId) as InterviewEvent[];
+export async function getEventsByProject(projectId: string): Promise<InterviewEvent[]> {
+  const result = await getDb().execute({
+    sql: `SELECT e.token, e.event, e.dimension, e.detail, e.timestamp
+          FROM events e
+          WHERE json_extract((SELECT data FROM sessions WHERE token = e.token), '$.projectId') = ?
+          ORDER BY e.timestamp DESC`,
+    args: [projectId],
+  });
+  return result.rows as unknown as InterviewEvent[];
 }
-
 
 function questionFp(text: string): string {
   return text
