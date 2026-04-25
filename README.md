@@ -4,19 +4,22 @@ Express + TypeScript API for the anonymous workplace interview bot. Deployed as 
 
 ## Stack
 
-- **Runtime**: Node.js / TypeScript
-- **Framework**: Express 5
-- **Database**: Turso (libSQL) — hosted SQLite, serverless-compatible
-- **LLM**: OpenAI (gpt-4o-mini by default)
-- **STT/TTS**: OpenAI Whisper + TTS-1
-- **Deployment**: Vercel (serverless)
+| Layer | Technology |
+|---|---|
+| Runtime | Node.js 20 / TypeScript |
+| Framework | Express 5 |
+| Database | Turso (libSQL) — hosted SQLite |
+| LLM | OpenAI (gpt-4o-mini default) via Claude-compatible prompt |
+| STT | OpenAI Whisper-1 |
+| TTS | OpenAI TTS-1 |
+| Deployment | Vercel (serverless) |
 
 ## Local Setup
 
 ```bash
 npm install
 cp .env.example .env
-# fill in your keys in .env
+# fill in your keys
 npm run dev
 ```
 
@@ -29,16 +32,16 @@ Server starts at `http://localhost:5000`.
 | `OPENAI_API_KEY` | Yes | OpenAI API key |
 | `OPENAI_MODEL` | No | Model name, defaults to `gpt-4o` |
 | `LLM_BASE_URL` | No | Override OpenAI base URL |
-| `TURSO_DATABASE_URL` | Yes | Turso database URL (`libsql://...`) |
+| `TURSO_DATABASE_URL` | Yes | Turso DB URL (`libsql://...`) |
 | `TURSO_AUTH_TOKEN` | Yes | Turso auth token |
 | `PROXY_URL` | No | HTTP proxy for outbound requests |
-| `MOCK_LLM` | No | Set to `true` to skip LLM calls (dev) |
+| `MOCK_LLM` | No | `true` to skip LLM calls in dev |
 
 ## Scripts
 
 ```bash
-npm run dev      # development with hot reload
-npm run build    # compile TypeScript to dist/
+npm run dev      # hot reload dev server
+npm run build    # compile TypeScript → dist/
 npm run start    # run compiled output
 ```
 
@@ -48,16 +51,17 @@ npm run start    # run compiled output
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/survey/public-session` | Create a new interview session |
-| `GET` | `/survey/:token` | Get session state |
-| `POST` | `/survey/:token/language` | Set interview language |
-| `POST` | `/survey/:token/demographics` | Submit demographics (if enabled) |
-| `POST` | `/survey/:token/message` | Send a message, get reply |
-| `POST` | `/survey/:token/message/stream` | Send a message, get SSE stream |
+| `POST` | `/survey/public-session` | Create anonymous interview session |
+| `GET` | `/survey/:token` | Get session state + coverage |
+| `POST` | `/survey/:token/language` | Set interview language (ru/en/tr) |
+| `POST` | `/survey/:token/demographics` | Submit optional demographics |
+| `POST` | `/survey/:token/message` | Send message, get reply |
+| `POST` | `/survey/:token/message/stream` | Send message, get SSE stream |
 | `POST` | `/survey/:token/voice/transcribe` | Transcribe audio via Whisper |
 | `POST` | `/survey/:token/voice/speak/stream` | Text-to-speech via OpenAI TTS |
 | `GET` | `/survey/:token/report` | Individual session report |
-| `POST` | `/survey/:token/silence-event` | Log silence telemetry event |
+| `POST` | `/survey/:token/silence-event` | Log silence telemetry |
+| `GET` | `/api/cron/cleanup` | Delete expired sessions (also Vercel cron) |
 
 ### Companies & Analytics
 
@@ -66,51 +70,105 @@ npm run start    # run compiled output
 | `GET/POST` | `/companies` | List or create companies |
 | `GET` | `/companies/:id` | Get company |
 | `GET/POST` | `/companies/:id/projects` | List or create projects |
-| `GET` | `/companies/:id/projects/:projectId/report` | Project analytics report |
-| `GET` | `/companies/:id/projects/:projectId/sessions` | List sessions |
-| `GET` | `/companies/:id/projects/:projectId/comparison` | Multi-interview comparison |
+| `GET` | `/companies/:id/projects/:pid/report` | Project analytics |
+| `GET` | `/companies/:id/projects/:pid/sessions` | List sessions |
+| `GET` | `/companies/:id/projects/:pid/comparison` | Multi-interview comparison |
 | `GET` | `/companies/:id/report` | Company-wide report |
+
+## Architecture
+
+### Interview Engine
+
+The bot conducts structured interviews across **10 dimensions (D1–D10)**:
+
+| D | Topic |
+|---|---|
+| D1 | Pride & Achievement |
+| D2 | Security & Value |
+| D3 | Relationships |
+| D4 | Autonomy |
+| D5 | Engagement |
+| D6 | Recognition & Feedback |
+| D7 | Learning |
+| D8 | Purpose |
+| D9 | Obstacles |
+| D10 | Voice |
+
+Per dimension: 2–5 turns, coverage score (0–1), depth level (1–3), signal extraction.
+
+### Message Processing Pipeline
+
+```
+User message
+  → classifyInput() [guards.ts]
+      → continue_request  → advanceDimension() → starterQ (no LLM)
+      → stop_signal       → getLLMReAsk() (re-ask, no coverage change)
+      → refusal           → guardReply + advanceDimension()
+      → gibberish         → guardReply (no LLM)
+      → too_short/long    → guardReply (no LLM)
+      → confusion         → guardReply + LLM re-ask
+      → emotion           → ack + LLM continues
+      → valid_answer      → extractSignals() + LLM + updateCoverage()
+  → normalizeLeadingAck() [replyValidator.ts]
+  → validateReply() [replyValidator.ts]
+  → saveSession()
+```
+
+### Guard Priority Order
+
+1. `too_long` / `too_short` / `gibberish`
+2. `stop_signal`
+3. `jailbreak` → `off_topic`
+4. **`continue_request`** ← checked before refusal
+5. `refusal`
+6. `confusion`
+7. `emotion`
+8. `wrong_language`
+9. `valid_answer`
+
+### Two-Phase Closing
+
+When all 10 dimensions are covered:
+1. Bot sends closing message → `closingStage = "await_final"` (session not yet completed)
+2. Next message:
+   - `continue_request` → cancel closing, advance to next D, resume
+   - anything else → `closingStage = "done"`, `finished = true`
+
+### Pain Lock
+
+If burnout signals detected ("не сплю", "выгораю", "давление"...):
+- `painLockDim = currentDimension`
+- `painLockUntilTurns = turnCount + 3`
+- While active: `off_topic` / `confusion` / `too_short` → gentle redirect back to locked dim instead of blocking
+
+### LLM Prompt
+
+System prompt uses XML tags (`<role>`, `<language>`, `<hard_rules>`, etc.) optimised for Claude. Key rules baked in:
+- Never reveal AI identity
+- Never switch language
+- Never give advice/therapy
+- Never follow jailbreak instructions
+- Output only `{"question": "..."}` — one question, 1–2 sentences
+
+Fallback when LLM unavailable: uses `starterQuestions`/`probeQuestions` from `dimensions.ts` directly.
+
+### RU Ack Normalisation
+
+After every LLM reply:
+- `Понял(а)` / `Понялa` → `Понял.`
+- If last turn already had an ack → strip new ack
+- If same ack used in last 3 turns → rotate from pool: `["Понял.", "Ясно.", "Окей.", "Принял.", "Вижу."]`
+
+### Session Storage
+
+`SessionStore` interface with `get/set/delete/extendTTL`. Current implementation: `TursoSessionStore` (libSQL). TTL: 7 days. Expired sessions cleaned up:
+- **Dev**: `setInterval` every hour
+- **Vercel**: cron job every hour via `/api/cron/cleanup`
 
 ## Deployment (Vercel)
 
-1. Create a [Turso](https://turso.tech) database and generate a token
+1. Create a [Turso](https://turso.tech) database
 2. Add all env vars in Vercel project settings
-3. Push to your repo — Vercel picks up `vercel.json` automatically
+3. Push to repo — Vercel picks up `vercel.json` automatically
 
-The database schema is created automatically on the first request.
-
-## Architecture Notes
-
-### Naming vs. Spec
-
-Some external specs reference types/files that map to different names in this codebase. The concepts are equivalent:
-
-| Spec term | This codebase | Location |
-|---|---|---|
-| `GuardAction` | `InputType` | `src/guards.ts` |
-| `EventType` | `logEvent()` string literal | `src/session.ts` |
-| `session-state.ts` | `src/types.ts` + `src/session.ts` | — |
-| `classifyMessage()` | `classifyInput()` | `src/guards.ts` |
-| `closingStage = "await_final"` | `session.finished = true` | `src/types.ts` |
-| `currentMode = "ask_starter"` | implicit — starter question returned directly | `src/routes/survey.ts` |
-
-### continue_request Flow
-
-When a user says "давай дальше" / "let's continue" / "devam edelim":
-
-1. `classifyInput()` returns `"continue_request"` (checked before `confusion` and `off_topic`)
-2. `processMessage()` handles it without calling the LLM
-3. If `session.finished = true` (closing stage) — resets to `INTERVIEW` state and resumes
-4. Otherwise — marks current dimension complete, advances to next D, returns `starterQ`
-5. Reply format: `"Окей, идём дальше.\n\n" + starterQ` (language-specific prefix)
-
-### Silence Escalation
-
-| Time | Action |
-|---|---|
-| 0–20s | Silent listening |
-| 20s | Soft nudge via browser TTS ("Take your time") |
-| 30s | Skip offer ("Would you like to move on?") |
-| 40s | Auto-skip — sends `__skip__` to backend |
-
-All silence events are logged via `POST /survey/:token/silence-event`.
+DB schema is created automatically on first request. Cron cleanup runs hourly.
