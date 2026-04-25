@@ -9,7 +9,7 @@ export function getDb(): Pool {
   if (!connectionString) throw new Error("DATABASE_URL is not configured.");
 
   _pool = new Pool({
-    connectionString,
+    connectionString: connectionString.replace("&channel_binding=require", "").replace("?channel_binding=require", ""),
     ssl: connectionString.includes("sslmode=require") ? { rejectUnauthorized: false } : false,
     max: 5,
     idleTimeoutMillis: 30000,
