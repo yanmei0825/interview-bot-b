@@ -8,6 +8,10 @@
         "includeFiles": ["src/**"],
         "maxLambdaSize": "50mb"
       }
+    },
+    {
+      "src": "src/cron/cleanup.ts",
+      "use": "@vercel/node"
     }
   ],
   "rewrites": [
@@ -16,6 +20,15 @@
   "functions": {
     "src/index.ts": {
       "maxDuration": 60
+    },
+    "src/cron/cleanup.ts": {
+      "maxDuration": 30
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/cron/cleanup",
+      "schedule": "0 * * * *"
+    }
+  ]
 }

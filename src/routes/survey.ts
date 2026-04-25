@@ -5,7 +5,7 @@ import {
   isQuestionAlreadyAsked, registerQuestion,
 } from "../session";
 import { classifyInput, getGuardReply, stripEmoji } from "../guards";
-import { getLLMReply } from "../llm";
+import { getLLMReply, getLLMReAsk } from "../llm";
 import { extractSignals, detectSentiment, detectBurnout } from "../prompt";
 import { validateReply } from "../replyValidator";
 import { normalizeLeadingAck } from "../replyValidator";
@@ -336,17 +336,31 @@ async function processMessage(session: InterviewSession, message: string): Promi
   if (session.closingStage === "await_final") {
     const cls = classifyInput(message, lang);
     if (cls === "continue_request") {
-      // User wants to continue — cancel closing, resume interview
+      // User wants to continue — cancel closing, advance to next dimension
       session.closingStage = "";
       delete session.closingStartedAt;
       session.finished = false;
       session.state = "INTERVIEW";
       await logEvent(session.token, "closing_cancelled", message.slice(0, 80));
-      const resumeQ = getDimension(session.currentDimension).starterQuestions[lang][0]!;
       session.history.push({ role: "user", content: message, timestamp: Date.now() });
-      session.history.push({ role: "assistant", content: resumeQ, timestamp: Date.now() });
+
+      const continuePrefix: Record<Language, string> = {
+        en: "Sure, let's keep going.\n\n",
+        ru: "Окей, идём дальше.\n\n",
+        tr: "Tamam, devam edelim.\n\n",
+      };
+      const advanced = advanceDimension(session);
+      if (!advanced || session.finished) {
+        const result = enterAwaitFinal(session, lang);
+        await saveSession(session);
+        await logEvent(session.token, "closing_started", `turns=${session.turnCount}`);
+        return result;
+      }
+      const nextQ = getDimension(session.currentDimension).starterQuestions[lang][0]!;
+      const reply = continuePrefix[lang] + nextQ;
+      session.history.push({ role: "assistant", content: reply, timestamp: Date.now() });
       await saveSession(session);
-      return { reply: resumeQ, dimension: session.currentDimension, finished: false, guardHit: true };
+      return { reply, dimension: session.currentDimension, finished: false, guardHit: true };
     }
     // Any other message → confirm done
     session.history.push({ role: "user", content: message, timestamp: Date.now() });
@@ -406,19 +420,13 @@ async function processMessage(session: InterviewSession, message: string): Promi
   await logEvent(session.token, "user_response_received", message.slice(0, 80), session.currentDimension);
   await logEvent(session.token, "input_classified", inputClass, session.currentDimension);
 
-  // stop_signal: acknowledge + re-ask current D with a fresh question, no coverage/advance
+  // stop_signal: acknowledge + re-ask current D via LLM (no coverage/signal/advance)
   if (inputClass === "stop_signal") {
     await logEvent(session.token, "stop_signal_detected", message.slice(0, 80), session.currentDimension);
     const ack = getGuardReply("stop_signal", lang);
-    const dim = getDimension(session.currentDimension);
-    const cov = session.coverage[session.currentDimension];
-    // Pick a fresh question from probes first, fall back to starters — skip already-asked ones
-    const candidates = [...dim.probeQuestions[lang], ...dim.starterQuestions[lang]];
-    const usedLower = session.history.filter(m => m.role === "assistant").map(m => m.content.toLowerCase());
-    const fresh = candidates.find(q => !usedLower.some(u => u.includes(q.toLowerCase().slice(0, 20))))
-      ?? dim.starterQuestions[lang][cov.turnCount % dim.starterQuestions[lang].length]!;
-    const reply = `${ack} ${fresh}`;
     session.history.push({ role: "user", content: message, timestamp: Date.now() });
+    const reAsk = await getLLMReAsk(session);
+    const reply = ack ? `${ack} ${reAsk}` : reAsk;
     session.history.push({ role: "assistant", content: reply, timestamp: Date.now() });
     await saveSession(session);
     return { reply, dimension: session.currentDimension, finished: false, guardHit: true };

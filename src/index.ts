@@ -3,7 +3,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import surveyRouter from "./routes/survey";
 import companyRouter from "./routes/company";
-import { initDb } from "./db";
+import { initDb, getDb } from "./db";
 import { seedDefaultProject } from "./seed";
 import { getUsageSummary, getUsageLog } from "./llm";
 import { getEvents } from "./session";
@@ -52,10 +52,46 @@ app.get("/usage", async (_req, res) => {
 app.use("/survey", surveyRouter);
 app.use("/companies", companyRouter);
 
+// Cron cleanup endpoint (also used by Vercel cron job)
+app.get("/api/cron/cleanup", async (_req, res) => {
+  try {
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const result = await getDb().execute({
+      sql: "DELETE FROM sessions WHERE expiresAt IS NOT NULL AND expiresAt < ?",
+      args: [cutoff],
+    });
+    const deleted = (result as any).rowsAffected ?? 0;
+    console.log(`[cron/cleanup] Deleted ${deleted} expired session(s)`);
+    res.json({ deleted });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message ?? "unknown" });
+  }
+});
+
 // Local dev: listen on port
 if (process.env.NODE_ENV !== "production") {
   const PORT = process.env.PORT || 5000;
-  app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
+  app.listen(PORT, () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+
+    // Abandoned session cleanup — runs every hour, deletes sessions expired > 24h ago
+    const CLEANUP_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+    const ABANDONED_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24h past expiry
+
+    setInterval(async () => {
+      try {
+        const cutoff = Date.now() - ABANDONED_THRESHOLD_MS;
+        const result = await getDb().execute({
+          sql: "DELETE FROM sessions WHERE expiresAt IS NOT NULL AND expiresAt < ?",
+          args: [cutoff],
+        });
+        const deleted = (result as any).rowsAffected ?? 0;
+        if (deleted > 0) console.log(`[cleanup] Deleted ${deleted} expired session(s)`);
+      } catch (err: any) {
+        console.error("[cleanup] Failed:", err?.message);
+      }
+    }, CLEANUP_INTERVAL_MS);
+  });
 }
 
 // Vercel serverless export

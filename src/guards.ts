@@ -100,9 +100,9 @@ const REFUSAL_PATTERNS: Record<Language, RegExp> = {
 };
 
 const CONTINUE_PATTERNS: Record<Language, RegExp> = {
-  en: /\b(continue|let'?s continue|keep going|move on|next|next topic|go on|carry on|what'?s next|let'?s go|proceed)\b/i,
-  ru: /(давай дальше|давай продолжим|продолжим|продолжай|продолжаем|на чём остановились|следующая тема|следующий вопрос|идём дальше|пошли дальше|двигаемся дальше|перейдём к следующему|к следующей теме)/i,
-  tr: /(devam edelim|devam et|devam ediyoruz|sonraki konuya|sonraki soruya|kaldığımız yerden devam|ilerliyoruz|geçelim|ilerleyelim)/i,
+  en: /\b(continue|let'?s continue|keep going|move on|next|next topic|go on|carry on|what'?s next|let'?s go|proceed|next question)\b/i,
+  ru: /(давай дальше|давай продолжим|продолжим|продолжай|продолжаем|поехали дальше|идём дальше|пошли дальше|двигаемся дальше|на чём остановил(ись|ся)|следующая тема|следующий вопрос|перейдём к следующему|к следующей теме|перейдём дальше|давай к следующему)/i,
+  tr: /(devam edelim|devam et|devam ediyoruz|sonraki konuya|sonraki soruya|kaldığımız yerden devam|ilerliyoruz|geçelim|ilerleyelim|bir sonraki soruya geçelim)/i,
 };
 
 const STOP_SIGNAL_PATTERNS: Record<Language, RegExp> = {
@@ -136,9 +136,10 @@ export function classifyInput(text: string, lang: Language): InputType {
     if (p.test(clean)) return "off_topic";
   }
 
-  if (REFUSAL_PATTERNS[lang].test(clean)) return "refusal";
-
+  // continue_request checked before refusal — "давай дальше" must not be caught as refusal
   if (CONTINUE_PATTERNS[lang].test(clean)) return "continue_request";
+
+  if (REFUSAL_PATTERNS[lang].test(clean)) return "refusal";
 
   if (CONFUSION_PATTERNS[lang].test(clean)) return "confusion";
 
