@@ -3,6 +3,7 @@ import { DIMENSION_ORDER, getDimension } from "./dimensions";
 import { getAllSessionsByProject, getEventsByProject } from "./session";
 import { listProjectsByCompany, getCompany } from "./store";
 
+
 export interface DimensionReport {
   key: DimensionKey;
   name: string;
