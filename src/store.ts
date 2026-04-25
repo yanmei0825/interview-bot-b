@@ -4,21 +4,22 @@ import { getDb } from "./db";
 
 export async function createCompany(name: string, id?: string): Promise<Company> {
   const company: Company = { id: id ?? uuidv4(), name, createdAt: Date.now() };
-  await getDb().execute({
-    sql: "INSERT OR REPLACE INTO companies (id, name, createdAt) VALUES (?, ?, ?)",
-    args: [company.id, company.name, company.createdAt],
-  });
+  await getDb().query(
+    `INSERT INTO companies (id, name, "createdAt") VALUES ($1, $2, $3)
+     ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name`,
+    [company.id, company.name, company.createdAt]
+  );
   return company;
 }
 
 export async function getCompany(id: string): Promise<Company | undefined> {
-  const result = await getDb().execute({ sql: "SELECT * FROM companies WHERE id = ?", args: [id] });
-  return result.rows[0] as unknown as Company | undefined;
+  const result = await getDb().query(`SELECT * FROM companies WHERE id = $1`, [id]);
+  return result.rows[0] as Company | undefined;
 }
 
 export async function listCompanies(): Promise<Company[]> {
-  const result = await getDb().execute("SELECT * FROM companies ORDER BY createdAt DESC");
-  return result.rows as unknown as Company[];
+  const result = await getDb().query(`SELECT * FROM companies ORDER BY "createdAt" DESC`);
+  return result.rows as Company[];
 }
 
 export async function createProject(
@@ -40,41 +41,44 @@ export async function createProject(
     createdAt: Date.now(),
     ...(opts.description !== undefined && { description: opts.description }),
   };
-  await getDb().execute({
-    sql: `INSERT OR REPLACE INTO projects (id, companyId, name, description, demographicsEnabled, allowedLanguages, createdAt)
-          VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    args: [
+  await getDb().query(
+    `INSERT INTO projects (id, "companyId", name, description, "demographicsEnabled", "allowedLanguages", "createdAt")
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     ON CONFLICT (id) DO UPDATE SET
+       name = EXCLUDED.name,
+       description = EXCLUDED.description,
+       "demographicsEnabled" = EXCLUDED."demographicsEnabled",
+       "allowedLanguages" = EXCLUDED."allowedLanguages"`,
+    [
       project.id,
       project.companyId,
       project.name,
       project.description ?? null,
-      project.demographicsEnabled ? 1 : 0,
+      project.demographicsEnabled,
       JSON.stringify(project.allowedLanguages),
       project.createdAt,
-    ],
-  });
+    ]
+  );
   return project;
 }
 
 export async function getProject(id: string): Promise<Project | undefined> {
-  const result = await getDb().execute({ sql: "SELECT * FROM projects WHERE id = ?", args: [id] });
+  const result = await getDb().query(`SELECT * FROM projects WHERE id = $1`, [id]);
   const row = result.rows[0] as any;
   if (!row) return undefined;
   return {
     ...row,
-    demographicsEnabled: row.demographicsEnabled === 1,
     allowedLanguages: JSON.parse(row.allowedLanguages as string),
   } as Project;
 }
 
 export async function listProjectsByCompany(companyId: string): Promise<Project[]> {
-  const result = await getDb().execute({
-    sql: "SELECT * FROM projects WHERE companyId = ? ORDER BY createdAt DESC",
-    args: [companyId],
-  });
-  return (result.rows as any[]).map((row) => ({
+  const result = await getDb().query(
+    `SELECT * FROM projects WHERE "companyId" = $1 ORDER BY "createdAt" DESC`,
+    [companyId]
+  );
+  return result.rows.map((row: any) => ({
     ...row,
-    demographicsEnabled: row.demographicsEnabled === 1,
     allowedLanguages: JSON.parse(row.allowedLanguages as string),
   }));
 }

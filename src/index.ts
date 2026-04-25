@@ -56,11 +56,8 @@ app.use("/companies", companyRouter);
 app.get("/api/cron/cleanup", async (_req, res) => {
   try {
     const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-    const result = await getDb().execute({
-      sql: "DELETE FROM sessions WHERE expiresAt IS NOT NULL AND expiresAt < ?",
-      args: [cutoff],
-    });
-    const deleted = (result as any).rowsAffected ?? 0;
+    const result = await getDb().query(`DELETE FROM sessions WHERE "expiresAt" IS NOT NULL AND "expiresAt" < $1`, [cutoff]);
+        const deleted = result.rowCount ?? 0;
     console.log(`[cron/cleanup] Deleted ${deleted} expired session(s)`);
     res.json({ deleted });
   } catch (err: any) {
@@ -81,11 +78,8 @@ if (process.env.NODE_ENV !== "production") {
     setInterval(async () => {
       try {
         const cutoff = Date.now() - ABANDONED_THRESHOLD_MS;
-        const result = await getDb().execute({
-          sql: "DELETE FROM sessions WHERE expiresAt IS NOT NULL AND expiresAt < ?",
-          args: [cutoff],
-        });
-        const deleted = (result as any).rowsAffected ?? 0;
+        const result = await getDb().query(`DELETE FROM sessions WHERE "expiresAt" IS NOT NULL AND "expiresAt" < $1`, [cutoff]);
+        const deleted = result.rowCount ?? 0;
         if (deleted > 0) console.log(`[cleanup] Deleted ${deleted} expired session(s)`);
       } catch (err: any) {
         console.error("[cleanup] Failed:", err?.message);
@@ -96,3 +90,5 @@ if (process.env.NODE_ENV !== "production") {
 
 // Vercel serverless export
 export default app;
+
+

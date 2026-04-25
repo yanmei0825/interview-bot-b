@@ -6,9 +6,9 @@ import {
 } from "./types";
 import { DIMENSION_ORDER, getDimension } from "./dimensions";
 import { getDb } from "./db";
-import { TursoSessionStore } from "./store/TursoSessionStore";
+import { PgSessionStore } from "./store/PgSessionStore";
 
-const sessionStore = new TursoSessionStore();
+const sessionStore = new PgSessionStore();
 
 function initCoverage(): InterviewSession["coverage"] {
   const coverage = {} as InterviewSession["coverage"];
@@ -82,10 +82,10 @@ export async function logEvent(
   detail?: string,
   dimension?: DimensionKey
 ): Promise<void> {
-  await getDb().execute({
-    sql: "INSERT INTO events (token, event, dimension, detail, timestamp) VALUES (?, ?, ?, ?, ?)",
-    args: [token, event, dimension ?? null, detail ?? null, Date.now()],
-  });
+  await getDb().query(
+    `INSERT INTO events (token, event, dimension, detail, timestamp) VALUES ($1, $2, $3, $4, $5)`,
+    [token, event, dimension ?? null, detail ?? null, Date.now()]
+  );
 }
 
 export function advanceDimension(session: InterviewSession): boolean {
@@ -152,29 +152,30 @@ export function getSessionSummary(session: InterviewSession) {
 }
 
 export async function getAllSessionsByProject(projectId: string): Promise<InterviewSession[]> {
-  const result = await getDb().execute({
-    sql: "SELECT data FROM sessions WHERE json_extract(data, '$.projectId') = ?",
-    args: [projectId],
-  });
-  return (result.rows as unknown as { data: string }[]).map((r) => deserializeSession(r.data));
+  const result = await getDb().query<{ data: string }>(
+    `SELECT data FROM sessions WHERE data::jsonb->>'projectId' = $1`,
+    [projectId]
+  );
+  return result.rows.map((r) => JSON.parse(r.data) as InterviewSession);
 }
 
 export async function getEvents(): Promise<InterviewEvent[]> {
-  const result = await getDb().execute(
-    "SELECT token, event, dimension, detail, timestamp FROM events ORDER BY timestamp DESC LIMIT 1000"
+  const result = await getDb().query(
+    `SELECT token, event, dimension, detail, timestamp FROM events ORDER BY timestamp DESC LIMIT 1000`
   );
-  return result.rows as unknown as InterviewEvent[];
+  return result.rows as InterviewEvent[];
 }
 
 export async function getEventsByProject(projectId: string): Promise<InterviewEvent[]> {
-  const result = await getDb().execute({
-    sql: `SELECT e.token, e.event, e.dimension, e.detail, e.timestamp
-          FROM events e
-          WHERE json_extract((SELECT data FROM sessions WHERE token = e.token), '$.projectId') = ?
-          ORDER BY e.timestamp DESC`,
-    args: [projectId],
-  });
-  return result.rows as unknown as InterviewEvent[];
+  const result = await getDb().query(
+    `SELECT e.token, e.event, e.dimension, e.detail, e.timestamp
+     FROM events e
+     JOIN sessions s ON s.token = e.token
+     WHERE s.data::jsonb->>'projectId' = $1
+     ORDER BY e.timestamp DESC`,
+    [projectId]
+  );
+  return result.rows as InterviewEvent[];
 }
 
 function questionFp(text: string): string {

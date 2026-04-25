@@ -1,60 +1,59 @@
-import { createClient, Client } from "@libsql/client";
+import { Pool } from "pg";
 
-let _db: Client | null = null;
+let _pool: Pool | null = null;
 
-export function getDb(): Client {
-  if (_db) return _db;
+export function getDb(): Pool {
+  if (_pool) return _pool;
 
-  const url = process.env.TURSO_DATABASE_URL;
-  const authToken = process.env.TURSO_AUTH_TOKEN;
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) throw new Error("DATABASE_URL is not configured.");
 
-  if (!url) throw new Error("TURSO_DATABASE_URL is not configured.");
+  _pool = new Pool({
+    connectionString,
+    ssl: process.env.DATABASE_SSL === "false" ? false : { rejectUnauthorized: false },
+    max: 10,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 5000,
+  });
 
-  _db = createClient({ url, ...(authToken ? { authToken } : {}) });
-  return _db;
+  return _pool;
 }
 
 export async function initDb(): Promise<void> {
   const db = getDb();
-  await db.executeMultiple(`
+  await db.query(`
     CREATE TABLE IF NOT EXISTS companies (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
-      createdAt INTEGER NOT NULL
+      "createdAt" BIGINT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS projects (
       id TEXT PRIMARY KEY,
-      companyId TEXT NOT NULL,
+      "companyId" TEXT NOT NULL,
       name TEXT NOT NULL,
       description TEXT,
-      demographicsEnabled INTEGER NOT NULL DEFAULT 0,
-      allowedLanguages TEXT NOT NULL DEFAULT '["ru","en","tr"]',
-      createdAt INTEGER NOT NULL
+      "demographicsEnabled" BOOLEAN NOT NULL DEFAULT FALSE,
+      "allowedLanguages" TEXT NOT NULL DEFAULT '["ru","en","tr"]',
+      "createdAt" BIGINT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS sessions (
       token TEXT PRIMARY KEY,
       data TEXT NOT NULL,
-      lastActivityAt INTEGER NOT NULL,
-      expiresAt INTEGER
+      "lastActivityAt" BIGINT NOT NULL,
+      "expiresAt" BIGINT
     );
 
     CREATE TABLE IF NOT EXISTS events (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       token TEXT NOT NULL,
       event TEXT NOT NULL,
       dimension TEXT,
       detail TEXT,
-      timestamp INTEGER NOT NULL
+      timestamp BIGINT NOT NULL
     );
 
     CREATE INDEX IF NOT EXISTS idx_events_token ON events(token);
   `);
-  // Migration: add expiresAt if it doesn't exist yet (safe on existing DBs)
-  try {
-    await db.execute("ALTER TABLE sessions ADD COLUMN expiresAt INTEGER");
-  } catch {
-    // Column already exists — ignore
-  }
 }
