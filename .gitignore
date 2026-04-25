@@ -4,3 +4,4 @@ node_modules
 data/interview.db
 data/interview.db-shm
 data/interview.db-wal
+package-lock.json
