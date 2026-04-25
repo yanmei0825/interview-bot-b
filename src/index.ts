@@ -37,6 +37,15 @@ app.get("/", (_req, res) => {
   res.json({ status: "ok", service: "interview-backend" });
 });
 
+app.get("/health", async (_req, res) => {
+  try {
+    await getDb().query("SELECT 1");
+    res.json({ status: "ok", db: "connected" });
+  } catch (err: any) {
+    res.status(500).json({ status: "error", db: "failed", error: err?.message });
+  }
+});
+
 app.get("/usage", async (_req, res) => {
   const events: InterviewEvent[] = await getEvents();
   const eventSummary: Record<string, number> = {};
