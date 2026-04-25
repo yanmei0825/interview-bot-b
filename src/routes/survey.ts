@@ -51,11 +51,17 @@ router.post("/:token/voice/transcribe", requireSession, requireLanguage, async (
     const audioBuffer: Buffer = await new Promise((resolve, reject) => {
       // If express.raw() already parsed it, use that
       if (Buffer.isBuffer(req.body) && req.body.length > 0) {
+        console.log("[Transcribe] body from express.raw, size:", req.body.length);
         return resolve(req.body);
       }
+      console.log("[Transcribe] reading from stream, body type:", typeof req.body, "content-type:", req.headers["content-type"]);
       const chunks: Buffer[] = [];
       req.on("data", (chunk: Buffer) => chunks.push(chunk));
-      req.on("end", () => resolve(Buffer.concat(chunks)));
+      req.on("end", () => {
+        const buf = Buffer.concat(chunks);
+        console.log("[Transcribe] stream read complete, size:", buf.length);
+        resolve(buf);
+      });
       req.on("error", reject);
     });
 
@@ -69,8 +75,8 @@ router.post("/:token/voice/transcribe", requireSession, requireLanguage, async (
     await saveSession(session);
     res.json({ text: result.text, confidence: result.confidence, language: result.language, duration: result.duration });
   } catch (err: any) {
-    console.error("[Voice Transcribe Error]", err);
-    res.status(500).json({ error: err.message });
+    console.error("[Voice Transcribe Error]", err?.message ?? err, err?.stack);
+    res.status(500).json({ error: err?.message ?? "Unknown error" });
   }
 });
 
@@ -243,6 +249,28 @@ async function resolveNextQuestion(session: InterviewSession, lang: Language): P
 
 async function processMessage(session: InterviewSession, message: string): Promise<ProcessResult> {
   const lang = session.language!;
+
+  // Internal sentinel sent when no speech was detected — always advance
+  if (message === "__skip__") {
+    const guardReply = getGuardReply("refusal", lang);
+    session.history.push({ role: "user", content: "", timestamp: Date.now() });
+    const advanced = advanceDimension(session);
+    let reply = guardReply;
+    if (advanced && !session.finished) {
+      const nextQ = getDimension(session.currentDimension).starterQuestions[lang][0]!;
+      reply = `${guardReply} ${nextQ}`;
+    } else if (session.finished) {
+      reply = getClosingMessage(lang);
+      session.history.push({ role: "assistant", content: reply, timestamp: Date.now() });
+      await saveSession(session);
+      await logEvent(session.token, "interview_completed", `turns=${session.turnCount}`);
+      return { reply, dimension: null, finished: true, guardHit: true };
+    }
+    session.history.push({ role: "assistant", content: reply, timestamp: Date.now() });
+    await saveSession(session);
+    return { reply, dimension: session.currentDimension, finished: false, guardHit: true };
+  }
+
   const inputClass = classifyInput(message, lang);
   await logEvent(session.token, "user_response_received", message.slice(0, 80), session.currentDimension);
   await logEvent(session.token, "input_classified", inputClass, session.currentDimension);
