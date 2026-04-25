@@ -1,5 +1,4 @@
 import OpenAI from "openai";
-import Anthropic from "@anthropic-ai/sdk";
 import { ProxyAgent } from "undici";
 import { InterviewSession } from "./types";
 import { parseLLMOutput, isReplyDuplicate, MAX_REPLY_TOKENS } from "./prompt";
@@ -30,35 +29,20 @@ export function getUsageSummary() {
   );
 }
 
-function getProvider(): "claude" | "openai" | "groq" {
-  const p = (process.env.LLM_PROVIDER ?? "").toLowerCase();
-  if (p === "claude" || p === "anthropic") return "claude";
-  if (p === "groq") return "groq";
-  return "openai";
-}
-
 let openaiClient: OpenAI | null = null;
 
 function getOpenAIClient(): OpenAI {
   if (openaiClient) return openaiClient;
 
-  const provider = getProvider();
-  const apiKey = provider === "groq"
-    ? process.env.GROQ_API_KEY
-    : process.env.OPENAI_API_KEY;
-
-  if (!apiKey) throw new Error(`${provider.toUpperCase()}_API_KEY is not configured.`);
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("OPENAI_API_KEY is not configured.");
 
   const proxyUrl = process.env.PROXY_URL;
   const proxyAgent = proxyUrl ? new ProxyAgent(proxyUrl) : null;
 
-  const baseURL = provider === "groq"
-    ? "https://api.groq.com/openai/v1"
-    : (process.env.LLM_BASE_URL ?? "https://api.openai.com/v1");
-
   openaiClient = new OpenAI({
     apiKey,
-    baseURL,
+    baseURL: process.env.LLM_BASE_URL ?? "https://api.openai.com/v1",
     fetch: proxyAgent
       ? (url: string, options?: RequestInit) =>
           fetch(url, { ...(options as any), dispatcher: proxyAgent } as any)
@@ -66,16 +50,6 @@ function getOpenAIClient(): OpenAI {
   });
 
   return openaiClient;
-}
-
-let claudeClient: Anthropic | null = null;
-
-function getClaudeClient(): Anthropic {
-  if (claudeClient) return claudeClient;
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not configured.");
-  claudeClient = new Anthropic({ apiKey });
-  return claudeClient;
 }
 
 function getMockReply(session: InterviewSession): string {
@@ -129,80 +103,16 @@ const LLM_CONFIG = {
   presence_penalty: 0.2,
   stop: ["\n\n", "?\n", "Human:", "User:", "Interviewer:"],
 } as const;
+
 export async function getLLMReply(session: InterviewSession): Promise<string> {
   if (process.env.MOCK_LLM === "true") {
     return getMockReply(session);
   }
 
-  const provider = getProvider();
-  
-  const systemPrompt = buildSystemPrompt(session);
-  
-  const llmInput = buildLLMInput(session);
-  const userMessage = buildUserMessage(llmInput);
-  const messages = [{ role: "user" as const, content: userMessage }];
-
-  if (provider === "claude") {
-    return getLLMReplyFromClaude(session, systemPrompt, messages);
-  }
-  return getLLMReplyFromOpenAI(session, systemPrompt, messages);
-}
-
-async function getLLMReplyFromClaude(
-  session: InterviewSession,
-  systemPrompt: string,
-  history: { role: "assistant" | "user"; content: string }[]
-): Promise<string> {
-  const ai = getClaudeClient();
-  const model = process.env.ANTHROPIC_MODEL ?? "claude-3-5-haiku-20241022";
-
-  try {
-    const response = await ai.messages.create({
-      model,
-      max_tokens: LLM_CONFIG.max_tokens,
-      temperature: LLM_CONFIG.temperature,
-      stop_sequences: ["\n\n", "Human:", "User:"],
-      system: systemPrompt,
-      messages: history,
-    });
-
-    const inputTokens = response.usage.input_tokens;
-    const outputTokens = response.usage.output_tokens;
-    usageLog.push({
-      token: session.token,
-      model,
-      promptTokens: inputTokens,
-      completionTokens: outputTokens,
-      totalTokens: inputTokens + outputTokens,
-      timestamp: Date.now(),
-    });
-    logEvent(session.token, "llm_usage", `prompt=${inputTokens} completion=${outputTokens}`);
-
-    const block = response.content[0];
-    const raw = block?.type === "text" ? block.text.trim() : "";
-    const parsed = parseLLMOutput(raw);
-    if (!isReplyDuplicate(parsed, session.history)) {
-      return parsed;
-    }
-    // duplicate — caller falls back to curated questions
-    return "";
-  } catch (err: any) {
-    console.error("[Claude REQUEST FAILED]", {
-      status: err?.status,
-      message: err?.message,
-      code: err?.error?.type,
-    });
-    throw err;
-  }
-}
-
-async function getLLMReplyFromOpenAI(
-  session: InterviewSession,
-  systemPrompt: string,
-  history: { role: "assistant" | "user"; content: string }[]
-): Promise<string> {
   const ai = getOpenAIClient();
-  const model = process.env.OPENAI_MODEL ?? (getProvider() === "groq" ? "llama-3.3-70b-versatile" : "gpt-4o");
+  const model = process.env.OPENAI_MODEL ?? "gpt-4o";
+  const systemPrompt = buildSystemPrompt(session);
+  const userMessage = buildUserMessage(buildLLMInput(session));
 
   try {
     const response = await ai.chat.completions.create({
@@ -212,7 +122,10 @@ async function getLLMReplyFromOpenAI(
       frequency_penalty: LLM_CONFIG.frequency_penalty,
       presence_penalty: LLM_CONFIG.presence_penalty,
       stop: [...LLM_CONFIG.stop],
-      messages: [{ role: "system", content: systemPrompt }, ...history],
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userMessage },
+      ],
     });
 
     if (response.usage) {
@@ -244,5 +157,3 @@ async function getLLMReplyFromOpenAI(
     throw err;
   }
 }
-
-

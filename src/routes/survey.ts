@@ -12,7 +12,6 @@ import { Language, InterviewSession, DimensionKey } from "../types";
 import { getDimension, DIMENSION_ORDER } from "../dimensions";
 import { getProject } from "../store";
 import { speechToText, textToSpeech, TTSOptions } from "../voice";
-import { analyzeVoiceInput, assessVoiceQuality, enforceCharacterLimit } from "../voice-processor";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -142,32 +141,6 @@ router.post("/:token/voice/speak/stream", requireSession, requireLanguage, async
     res.send(Buffer.from(audioBuffer));
   } catch (err: any) {
     console.error("[Voice Speak Error]", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-router.post("/:token/voice/analyze", requireSession, async (req: Request, res: Response) => {
-  try {
-    const session = res.locals.session as InterviewSession;
-    const { text, language, confidence, duration } = req.body as {
-      text?: string;
-      language?: Language;
-      confidence?: number;
-      duration?: number;
-    };
-
-    if (!text || !language) {
-      return res.status(400).json({ error: "text and language are required" });
-    }
-
-    const { truncated } = enforceCharacterLimit(text, 500, 100, language);
-    const qualityMetrics = assessVoiceQuality(new ArrayBuffer(0), duration ?? 0);
-    const analysis = analyzeVoiceInput(truncated, language, qualityMetrics, confidence ?? 0.85);
-
-    logEvent(session.token, "voice_analyzed", `${analysis.wordCount} words, ${analysis.sentiment}`, session.currentDimension);
-    res.json(analysis);
-  } catch (err: any) {
-    console.error("[Voice Analyze Error]", err);
     res.status(500).json({ error: err.message });
   }
 });
