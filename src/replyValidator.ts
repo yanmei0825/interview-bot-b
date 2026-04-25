@@ -192,3 +192,66 @@ function getFallback(lang: Language): string {
   fallbackIndex++;
   return reply;
 }
+
+// ── RU ack normalization ──────────────────────────────────────────────────────
+
+const ACK_POOL: Record<Language, string[]> = {
+  ru: ["Понял.", "Ясно.", "Окей.", "Принял.", "Вижу."],
+  en: ["Got it.", "Okay.", "Sure.", "Right.", "I see."],
+  tr: ["Anladım.", "Tamam.", "Peki.", "Evet.", "Görüyorum."],
+};
+
+// Patterns that match leading ack phrases the LLM might produce
+const ACK_PREFIX_RE: Record<Language, RegExp> = {
+  ru: /^(Понял\(а\)|Понял[аo]?|Ясно|Окей|Принял\(а\)|Принял[аo]?|Вижу|Хорошо|Конечно)[.!,]?\s*/i,
+  en: /^(Got it|Okay|Sure|Right|I see|Of course|Understood)[.!,]?\s*/i,
+  tr: /^(Anladım|Tamam|Peki|Evet|Görüyorum|Tabii)[.!,]?\s*/i,
+};
+
+// Fix gendered forms: "Понял(а)" → "Понял."
+function fixGenderedAck(text: string): string {
+  return text
+    .replace(/Понял\(а\)/gi, "Понял.")
+    .replace(/Принял\(а\)/gi, "Принял.")
+    .replace(/Понял[аo]\b/gi, "Понял.")
+    .replace(/Принял[аo]\b/gi, "Принял.");
+}
+
+function extractLeadingAck(text: string, lang: Language): string | null {
+  const m = ACK_PREFIX_RE[lang]?.exec(text);
+  return m ? m[0].trim().replace(/[,!]$/, ".") : null;
+}
+
+export function normalizeLeadingAck(
+  reply: string,
+  lang: Language,
+  lastAcksUsed: string[]
+): { reply: string; ackUsed: string | null } {
+  // Fix gendered forms first
+  let text = fixGenderedAck(reply);
+
+  const leadingAck = extractLeadingAck(text, lang);
+  if (!leadingAck) return { reply: text, ackUsed: null };
+
+  const rest = text.slice(leadingAck.length).trimStart();
+
+  // Check if last bot turn already started with an ack — if so, drop it entirely
+  const lastAck = lastAcksUsed[lastAcksUsed.length - 1];
+  if (lastAck) {
+    return { reply: rest || text, ackUsed: null };
+  }
+
+  // Check if this ack was used in the last 3 turns — swap for a different one
+  const pool = ACK_POOL[lang] ?? ACK_POOL["en"]!;
+  const normalizedAck = leadingAck.replace(/[^а-яёa-zçğışöü]/gi, "").toLowerCase();
+  const recentNormalized = lastAcksUsed.slice(-3).map(a => a.replace(/[^а-яёa-zçğışöü]/gi, "").toLowerCase());
+
+  let ackToUse = leadingAck;
+  if (recentNormalized.includes(normalizedAck)) {
+    const fresh = pool.find(a => !recentNormalized.includes(a.replace(/[^а-яёa-zçğışöü]/gi, "").toLowerCase()));
+    if (fresh) ackToUse = fresh;
+  }
+
+  const finalReply = rest ? `${ackToUse} ${rest}` : ackToUse;
+  return { reply: finalReply, ackUsed: ackToUse };
+}

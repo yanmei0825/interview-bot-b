@@ -1,7 +1,7 @@
 import { DimensionKey } from "./types";
 import { DIMENSION_ORDER, getDimension } from "./dimensions";
 import { getAllSessionsByProject, getEventsByProject } from "./session";
-import { listProjectsByCompany } from "./store";
+import { listProjectsByCompany, getCompany } from "./store";
 
 export interface DimensionReport {
   key: DimensionKey;
@@ -13,6 +13,8 @@ export interface DimensionReport {
   avgDepthScore: number;
   topSignals: string[];
   sentimentBreakdown: { positive: number; negative: number; neutral: number };
+  burnoutCount: number;
+  painLockRedirectCount: number;
 }
 
 export interface ProjectReport {
@@ -78,11 +80,15 @@ export async function generateProjectReport(projectId: string): Promise<ProjectR
       .map(([sig]) => sig);
 
     const sentimentBreakdown = { positive: 0, negative: 0, neutral: 0 };
+    let burnoutCount = 0;
+    let painLockRedirectCount = 0;
     for (const ev of allEvents) {
       if (ev.dimension === key) {
         if (ev.event === "sentiment_positive") sentimentBreakdown.positive++;
         else if (ev.event === "sentiment_negative") sentimentBreakdown.negative++;
         else if (ev.event === "sentiment_neutral") sentimentBreakdown.neutral++;
+        else if (ev.event === "burnout_detected") burnoutCount++;
+        else if (ev.event === "pain_lock_redirect") painLockRedirectCount++;
       }
     }
 
@@ -96,6 +102,8 @@ export async function generateProjectReport(projectId: string): Promise<ProjectR
       avgDepthScore,
       topSignals,
       sentimentBreakdown,
+      burnoutCount,
+      painLockRedirectCount,
     };
   });
 
@@ -143,11 +151,14 @@ export interface CompanyReport {
 }
 
 export async function generateCompanyReport(companyId: string): Promise<CompanyReport> {
-  const projects = await listProjectsByCompany(companyId);
+  const [projects, company] = await Promise.all([
+    listProjectsByCompany(companyId),
+    getCompany(companyId),
+  ]);
 
   if (projects.length === 0) {
     return {
-      companyId, companyName: "", totalProjects: 0, totalSessions: 0,
+      companyId, companyName: company?.name ?? "", totalProjects: 0, totalSessions: 0,
       finishedSessions: 0, overallCompletionRate: 0, overallDepthScore: 0,
       dimensions: [], projectBreakdown: [], keyInsights: [], generatedAt: Date.now(),
     };
@@ -212,7 +223,7 @@ export async function generateCompanyReport(companyId: string): Promise<CompanyR
 
   return {
     companyId,
-    companyName: projects[0]?.companyId || "",
+    companyName: company?.name ?? "",
     totalProjects: projects.length,
     totalSessions,
     finishedSessions: totalFinished,

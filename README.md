@@ -56,6 +56,8 @@ npm run start    # run compiled output
 | `POST` | `/survey/:token/message/stream` | Send a message, get SSE stream |
 | `POST` | `/survey/:token/voice/transcribe` | Transcribe audio via Whisper |
 | `POST` | `/survey/:token/voice/speak/stream` | Text-to-speech via OpenAI TTS |
+| `GET` | `/survey/:token/report` | Individual session report |
+| `POST` | `/survey/:token/silence-event` | Log silence telemetry event |
 
 ### Companies & Analytics
 
@@ -76,3 +78,39 @@ npm run start    # run compiled output
 3. Push to your repo — Vercel picks up `vercel.json` automatically
 
 The database schema is created automatically on the first request.
+
+## Architecture Notes
+
+### Naming vs. Spec
+
+Some external specs reference types/files that map to different names in this codebase. The concepts are equivalent:
+
+| Spec term | This codebase | Location |
+|---|---|---|
+| `GuardAction` | `InputType` | `src/guards.ts` |
+| `EventType` | `logEvent()` string literal | `src/session.ts` |
+| `session-state.ts` | `src/types.ts` + `src/session.ts` | — |
+| `classifyMessage()` | `classifyInput()` | `src/guards.ts` |
+| `closingStage = "await_final"` | `session.finished = true` | `src/types.ts` |
+| `currentMode = "ask_starter"` | implicit — starter question returned directly | `src/routes/survey.ts` |
+
+### continue_request Flow
+
+When a user says "давай дальше" / "let's continue" / "devam edelim":
+
+1. `classifyInput()` returns `"continue_request"` (checked before `confusion` and `off_topic`)
+2. `processMessage()` handles it without calling the LLM
+3. If `session.finished = true` (closing stage) — resets to `INTERVIEW` state and resumes
+4. Otherwise — marks current dimension complete, advances to next D, returns `starterQ`
+5. Reply format: `"Окей, идём дальше.\n\n" + starterQ` (language-specific prefix)
+
+### Silence Escalation
+
+| Time | Action |
+|---|---|
+| 0–20s | Silent listening |
+| 20s | Soft nudge via browser TTS ("Take your time") |
+| 30s | Skip offer ("Would you like to move on?") |
+| 40s | Auto-skip — sends `__skip__` to backend |
+
+All silence events are logged via `POST /survey/:token/silence-event`.

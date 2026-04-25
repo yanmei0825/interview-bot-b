@@ -59,6 +59,8 @@ export interface InterviewSession {
   demographicsSubmitted: boolean;
   started: boolean;
   finished: boolean;
+  closingStage: "await_final" | "done" | "";
+  closingStartedAt?: number | undefined;
   state: InterviewState;
   currentDimension: DimensionKey;
   dimensionIndex: number;
@@ -66,7 +68,10 @@ export interface InterviewSession {
   history: Message[];
   turnCount: number;
   questionCount: number;
-  askedQuestionFps: string[]; 
+  askedQuestionFps: string[];
+  painLockDim?: DimensionKey | null;
+  painLockUntilTurns?: number;
+  lastAcksUsed: string[];
   createdAt: number;
   lastActivityAt: number;
 }

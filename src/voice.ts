@@ -1,6 +1,7 @@
 import { Language } from "./types";
 import OpenAI from "openai";
 import { toFile } from "openai";
+import { detectLanguage } from "./guards";
 
 export interface TTSOptions {
   speed?: number;
@@ -58,22 +59,8 @@ function isHallucination(text: string): boolean {
   return WHISPER_HALLUCINATIONS.has(normalized);
 }
 
-function detectScript(text: string): Language | null {
-  const clean = text.replace(/\s+/g, "");
-  if (!clean.length) return null;
-  const cyrillic = (clean.match(/[а-яёА-ЯЁ]/g) ?? []).length;
-  const turkish  = (clean.match(/[çğışöüÇĞİŞÖÜ]/g) ?? []).length;
-  const latin    = (clean.match(/[a-zA-Z]/g) ?? []).length;
-  const total    = cyrillic + turkish + latin;
-  if (!total) return null;
-  if (cyrillic / total >= 0.3) return "ru";
-  if (turkish  / total >= 0.3) return "tr";
-  if (latin    / total >= 0.3) return "en";
-  return null;
-}
-
 function isWrongLanguage(text: string, expected: Language): boolean {
-  const detected = detectScript(text);
+  const detected = detectLanguage(text);
   return detected !== null && detected !== expected;
 }
 
@@ -85,9 +72,9 @@ export async function speechToText(
 
   const file = await toFile(Buffer.from(audioBuffer), "audio.webm", { type: "audio/webm" });
 
-  // Very short audio (< ~1s at typical bitrate) is almost certainly silence
+  // Very short audio (< ~0.3s at typical bitrate) is almost certainly silence
   const estimatedDurationMs = (audioBuffer.byteLength / 16000) * 1000;
-  if (estimatedDurationMs < 800) {
+  if (estimatedDurationMs < 300) {
     return { text: "", confidence: 0, language, duration: estimatedDurationMs, isFinal: true };
   }
 
@@ -98,7 +85,7 @@ export async function speechToText(
   });
 
   return {
-    text: (response.text && !isHallucination(response.text) && !isWrongLanguage(response.text, language)) ? response.text : "",
+    text: (response.text && !isHallucination(response.text)) ? response.text : "",
     confidence: 0.95,
     language,
     duration: (audioBuffer.byteLength / 32000) * 1000,

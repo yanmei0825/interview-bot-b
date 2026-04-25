@@ -6,6 +6,9 @@ import {
 } from "./types";
 import { DIMENSION_ORDER, getDimension } from "./dimensions";
 import { getDb } from "./db";
+import { TursoSessionStore } from "./store/TursoSessionStore";
+
+const sessionStore = new TursoSessionStore();
 
 function initCoverage(): InterviewSession["coverage"] {
   const coverage = {} as InterviewSession["coverage"];
@@ -13,10 +16,6 @@ function initCoverage(): InterviewSession["coverage"] {
     coverage[key] = { key, covered: false, turnCount: 0, signals: [], depthLevel: 1, coverageScore: 0 };
   }
   return coverage;
-}
-
-function serializeSession(session: InterviewSession): string {
-  return JSON.stringify(session);
 }
 
 function deserializeSession(data: string): InterviewSession {
@@ -31,7 +30,10 @@ export function computeDimensionMetrics(
 ): { depthLevel: number; coverageScore: number } {
   const ratio = turnCount / Math.max(maxTurns, 1);
   const depthLevel = turnCount < minTurns ? 1 : ratio < 0.66 ? 2 : 3;
-  const coverageScore = Math.min(signalCount / 5, 1);
+  // Coverage requires both turns AND signals — prevents 0→high jump on first answer
+  const turnScore = Math.min(turnCount / Math.max(minTurns, 1), 1) * 0.5;
+  const signalScore = Math.min(signalCount / 3, 1) * 0.5;
+  const coverageScore = turnCount === 0 ? 0 : Math.round((turnScore + signalScore) * 100) / 100;
   return { depthLevel, coverageScore };
 }
 
@@ -49,6 +51,7 @@ export async function createSession(
     demographicsSubmitted: false,
     started: false,
     finished: false,
+    closingStage: "",
     state: "INIT",
     currentDimension: "D1",
     dimensionIndex: 0,
@@ -57,32 +60,20 @@ export async function createSession(
     turnCount: 0,
     questionCount: 0,
     askedQuestionFps: [],
+    lastAcksUsed: [],
     createdAt: Date.now(),
     lastActivityAt: Date.now(),
   };
-  await getDb().execute({
-    sql: "INSERT INTO sessions (token, data, lastActivityAt) VALUES (?, ?, ?)",
-    args: [token, serializeSession(session), session.lastActivityAt],
-  });
+  await sessionStore.set(token, session);
   return session;
 }
 
 export async function getSession(token: string): Promise<InterviewSession | undefined> {
-  const result = await getDb().execute({
-    sql: "SELECT data FROM sessions WHERE token = ?",
-    args: [token],
-  });
-  const row = result.rows[0] as { data: string } | undefined;
-  if (!row) return undefined;
-  return deserializeSession(row.data as string);
+  return sessionStore.get(token);
 }
 
 export async function saveSession(session: InterviewSession): Promise<void> {
-  session.lastActivityAt = Date.now();
-  await getDb().execute({
-    sql: "UPDATE sessions SET data = ?, lastActivityAt = ? WHERE token = ?",
-    args: [serializeSession(session), session.lastActivityAt, session.token],
-  });
+  await sessionStore.set(session.token, session);
 }
 
 export async function logEvent(
@@ -154,6 +145,7 @@ export function getSessionSummary(session: InterviewSession) {
     questionCount: session.questionCount,
     coverage: session.coverage,
     demographics: session.demographics,
+    painLockDim: session.painLockDim ?? null,
     createdAt: session.createdAt,
     lastActivityAt: session.lastActivityAt,
   };

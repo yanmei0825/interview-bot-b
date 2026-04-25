@@ -157,7 +157,3 @@ Now read the input JSON and output ONLY: {"question": "..."}`;
 export function buildUserMessage(input: ReturnType<typeof buildLLMInput>): string {
   return JSON.stringify(input, null, 2);
 }
-
-
-
-

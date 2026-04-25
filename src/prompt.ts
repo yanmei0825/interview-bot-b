@@ -60,6 +60,19 @@ export function extractSignals(text: string, dim: DimensionKey): string[] {
   return (SIGNAL_KEYWORDS[dim] ?? []).filter((kw) => lower.includes(kw.toLowerCase()));
 }
 
+// ── Burnout / pain cluster detector ──────────────────────────────────────────
+
+const BURNOUT_PATTERNS: Record<string, RegExp> = {
+  en: /\b(can'?t sleep|not sleeping|burnout|burned out|burning out|health|sick|ill|blood pressure|exhausted|exhaustion|overworked|overload|overwhelmed)\b/i,
+  ru: /(не сплю|мало сплю|выгора(ю|ние|ет)|здоров(ье|ьем) плохо|давлен(ие|ят)|устал(ость)?|переработк|перегруз|не могу больше|на грани)/i,
+  tr: /\b(uyuyamıyorum|az uyuyorum|tükenmişlik|tükendim|sağlık|hasta|tansiyon|yorgunluk|aşırı yük|bunaldım)\b/i,
+};
+
+export function detectBurnout(text: string, lang: string): boolean {
+  const pattern = BURNOUT_PATTERNS[lang] ?? BURNOUT_PATTERNS["en"]!;
+  return pattern.test(text);
+}
+
 export type Sentiment = "positive" | "negative" | "neutral";
 
 const POSITIVE_WORDS = [

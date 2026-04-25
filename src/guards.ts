@@ -27,6 +27,8 @@ function isWrongLanguage(text: string, expected: Language): boolean {
 export type InputType =
   | "valid_answer"
   | "refusal"
+  | "continue_request"
+  | "stop_signal"
   | "off_topic"
   | "gibberish"
   | "too_short"
@@ -93,8 +95,20 @@ const JAILBREAK_PATTERNS = [
 
 const REFUSAL_PATTERNS: Record<Language, RegExp> = {
   en: /\b(skip|pass|next question|don't want|not comfortable|rather not|no answer|decline|prefer not|won't answer|not going to answer|move on|next topic)\b/i,
-  ru: /\b(пропустить|пропусти|не хочу|не буду|следующий|дальше|отказываюсь|не отвечу|не хочу отвечать|не буду отвечать|перейдём дальше)\b/i,
+  ru: /\b(пропустить|пропусти|не хочу|не буду|отказываюсь|не отвечу|не хочу отвечать|не буду отвечать|перейдём дальше)\b/i,
   tr: /\b(geç|atla|istemiyorum|cevaplamak istemiyorum|hayır|pas geçeyim|cevap vermek istemiyorum|geçelim|devam edelim)\b/i,
+};
+
+const CONTINUE_PATTERNS: Record<Language, RegExp> = {
+  en: /\b(continue|let'?s continue|keep going|move on|next|next topic|go on|carry on|what'?s next|let'?s go|proceed)\b/i,
+  ru: /(давай дальше|давай продолжим|продолжим|продолжай|продолжаем|на чём остановились|следующая тема|следующий вопрос|идём дальше|пошли дальше|двигаемся дальше|перейдём к следующему|к следующей теме)/i,
+  tr: /(devam edelim|devam et|devam ediyoruz|sonraki konuya|sonraki soruya|kaldığımız yerden devam|ilerliyoruz|geçelim|ilerleyelim)/i,
+};
+
+const STOP_SIGNAL_PATTERNS: Record<Language, RegExp> = {
+  en: /\b(stop|wait|hold on|pause|that'?s not right|you misunderstood|you got it wrong|not what i meant|you'?re acting like a bot|sounds like a bot|too formal|start over|reset|let'?s restart|what'?s going on|what are you doing)\b/i,
+  ru: /(стоп|подожди|погоди|не так|не то|не правильно|ты не так понял|говоришь как бот|звучишь как бот|слишком официально|начнём заново|начни заново|что происходит|что ты делаешь|сначала|перезапусти|давай сначала)/i,
+  tr: /(dur|bekle|yanlış anladın|bu doğru değil|bot gibi konuşuyorsun|çok resmi|baştan başlayalım|ne oluyor|ne yapıyorsun|yeniden başla|sıfırla)/i,
 };
 
 const CONFUSION_PATTERNS: Record<Language, RegExp> = {
@@ -116,11 +130,15 @@ export function classifyInput(text: string, lang: Language): InputType {
 
   if (clean.trim().length < MIN_CHARS) return "too_short";
 
+  if (STOP_SIGNAL_PATTERNS[lang].test(clean)) return "stop_signal";
+
   for (const p of JAILBREAK_PATTERNS) {
     if (p.test(clean)) return "off_topic";
   }
 
   if (REFUSAL_PATTERNS[lang].test(clean)) return "refusal";
+
+  if (CONTINUE_PATTERNS[lang].test(clean)) return "continue_request";
 
   if (CONFUSION_PATTERNS[lang].test(clean)) return "confusion";
 
@@ -208,6 +226,16 @@ const GUARD_POOLS: Record<InputType, GuardPool> = {
     en: ["No problem — we can move on.", "Totally fine, let's skip that.", "Understood."],
     ru: ["Без проблем — двигаемся дальше.", "Всё нормально, пропустим.", "Понял."],
     tr: ["Sorun değil — devam edelim.", "Tamam, geçelim.", "Anladım."],
+  },
+  continue_request: {
+    en: ["Sure —", "Of course —", ""],
+    ru: ["Хорошо —", "Конечно —", ""],
+    tr: ["Tabii —", "Elbette —", ""],
+  },
+  stop_signal: {
+    en: ["Got it.", "Fair enough.", "Understood."],
+    ru: ["Понял.", "Хорошо.", "Окей."],
+    tr: ["Anladım.", "Tamam.", "Peki."],
   },
   confusion: {
     en: ["Fair enough — let me put it differently.", "Let me rephrase that.", "Different angle:"],

@@ -6,10 +6,11 @@ import {
 } from "../session";
 import { classifyInput, getGuardReply, stripEmoji } from "../guards";
 import { getLLMReply } from "../llm";
-import { extractSignals, detectSentiment } from "../prompt";
+import { extractSignals, detectSentiment, detectBurnout } from "../prompt";
 import { validateReply } from "../replyValidator";
+import { normalizeLeadingAck } from "../replyValidator";
 import { Language, InterviewSession, DimensionKey } from "../types";
-import { getDimension } from "../dimensions";
+import { getDimension, DIMENSION_ORDER } from "../dimensions";
 import { getProject } from "../store";
 import { speechToText, textToSpeech, TTSOptions } from "../voice";
 
@@ -118,6 +119,29 @@ router.post("/:token/voice/speak/stream", requireSession, requireLanguage, async
   }
 });
 
+// ── Two-phase closing helpers ─────────────────────────────────────────────────
+
+function enterAwaitFinal(session: InterviewSession, lang: Language): ProcessResult {
+  session.closingStage = "await_final";
+  session.closingStartedAt = Date.now();
+  const msg = getClosingMessage(lang);
+  session.history.push({ role: "assistant", content: msg, timestamp: Date.now() });
+  return { reply: msg, dimension: null, finished: false, guardHit: true };
+}
+
+function finalizeDone(session: InterviewSession, lang: Language): ProcessResult {
+  session.closingStage = "done";
+  session.finished = true;
+  session.state = "COMPLETE";
+  const ack = getFinalAck(lang);
+  session.history.push({ role: "assistant", content: ack, timestamp: Date.now() });
+  return { reply: ack, dimension: null, finished: true, guardHit: true };
+}
+
+function getFinalAck(lang: Language): string {
+  return { en: "Thank you — that's everything.", ru: "Спасибо, это всё.", tr: "Teşekkürler, hepsi bu kadar." }[lang];
+}
+
 // ── Core interview logic ──────────────────────────────────────────────────────
 
 interface ProcessResult {
@@ -146,6 +170,43 @@ async function handleGuardedInput(
     await saveSession(session);
     return { reply, dimension: session.currentDimension, finished: session.finished, guardHit: true };
   };
+
+  // ── pain_lock: if active and user goes off-topic/vague, gently return to locked dim ──
+  const painLockActive = session.painLockDim != null
+    && session.painLockUntilTurns != null
+    && session.turnCount < session.painLockUntilTurns;
+
+  if (painLockActive && (inputClass === "off_topic" || inputClass === "confusion" || inputClass === "too_short")) {
+    // Re-ask the last question the bot asked — not a random new one
+    const lastBotQ = session.history
+      .filter(m => m.role === "assistant" && m.content.includes("?"))
+      .slice(-1)[0]?.content ?? getDimension(session.painLockDim!).starterQuestions[lang][0]!;
+
+    // Check if the very last bot message already contains this question (spam guard)
+    const lastBotMsg = session.history.filter(m => m.role === "assistant").slice(-1)[0]?.content ?? "";
+    const alreadyRepeated = lastBotMsg.includes(lastBotQ.slice(0, 30));
+
+    const prefix: Record<Language, { normal: string; repeated: string }> = {
+      en: {
+        normal: "That's okay — let's stay with what you were sharing. ",
+        repeated: "I hear you — no pressure. Whenever you're ready: ",
+      },
+      ru: {
+        normal: "Всё нормально — давай вернёмся к тому, о чём говорили. ",
+        repeated: "Понимаю, не торопись. Когда будешь готов: ",
+      },
+      tr: {
+        normal: "Sorun değil — anlattığın konuya dönelim. ",
+        repeated: "Anlıyorum, acele etme. Hazır olduğunda: ",
+      },
+    };
+
+    const lead = alreadyRepeated ? prefix[lang].repeated : prefix[lang].normal;
+    const reply = lead + lastBotQ;
+    pushHistory(processedMessage, reply);
+    await logEvent(session.token, "pain_lock_redirect", session.painLockDim!, session.painLockDim!);
+    return done(reply);
+  }
 
   if (inputClass === "wrong_language") {
     const lastBotMsg = session.history.filter(m => m.role === "assistant").slice(-1)[0]?.content ?? "";
@@ -206,6 +267,13 @@ async function handleValidInput(
   updateDimensionMetrics(session);
   session.history.push({ role: "user", content: cleanMessage, timestamp: Date.now() });
 
+  // ── pain_lock: detect burnout cluster and lock dimension for 3 turns ──
+  if (detectBurnout(cleanMessage, lang)) {
+    session.painLockDim = session.currentDimension;
+    session.painLockUntilTurns = session.turnCount + 3;
+    await logEvent(session.token, "burnout_detected", cleanMessage.slice(0, 80), session.currentDimension);
+  }
+
   if (inputClass === "emotion") {
     session.history.push({ role: "assistant", content: getGuardReply("emotion", lang), timestamp: Date.now() });
   }
@@ -215,17 +283,24 @@ async function handleValidInput(
     const hasNext = advanceDimension(session);
     await logEvent(session.token, "dimension_completed", prevDim, prevDim as DimensionKey);
     if (!hasNext) {
-      const closing = getClosingMessage(lang);
-      session.history.push({ role: "assistant", content: closing, timestamp: Date.now() });
+      const result = enterAwaitFinal(session, lang);
       await saveSession(session);
-      await logEvent(session.token, "interview_completed", `turns=${session.turnCount}`);
-      return { reply: closing, dimension: null, finished: true, guardHit: false };
+      await logEvent(session.token, "closing_started", `turns=${session.turnCount}`);
+      return result;
     }
     await logEvent(session.token, "dimension_started", session.currentDimension, session.currentDimension);
   }
 
   const nextQuestion = await resolveNextQuestion(session, lang);
-  const finalQuestion = safeAddBotQuestion(session, nextQuestion, lang);
+  // Normalize leading ack: fix gendered forms, prevent repetition
+  const { reply: normalizedQ, ackUsed } = normalizeLeadingAck(nextQuestion, lang, session.lastAcksUsed ?? []);
+  if (ackUsed) {
+    session.lastAcksUsed = [...(session.lastAcksUsed ?? []).slice(-3), ackUsed];
+  } else {
+    // No ack used this turn — reset streak so next ack is allowed
+    session.lastAcksUsed = [];
+  }
+  const finalQuestion = safeAddBotQuestion(session, normalizedQ, lang);
   await saveSession(session);
   await logEvent(session.token, "question_generated", finalQuestion.slice(0, 80), session.currentDimension);
   session.questionCount++;
@@ -257,6 +332,30 @@ async function resolveNextQuestion(session: InterviewSession, lang: Language): P
 async function processMessage(session: InterviewSession, message: string): Promise<ProcessResult> {
   const lang = session.language!;
 
+  // ── Two-phase closing: intercept await_final before anything else ──────────
+  if (session.closingStage === "await_final") {
+    const cls = classifyInput(message, lang);
+    if (cls === "continue_request") {
+      // User wants to continue — cancel closing, resume interview
+      session.closingStage = "";
+      delete session.closingStartedAt;
+      session.finished = false;
+      session.state = "INTERVIEW";
+      await logEvent(session.token, "closing_cancelled", message.slice(0, 80));
+      const resumeQ = getDimension(session.currentDimension).starterQuestions[lang][0]!;
+      session.history.push({ role: "user", content: message, timestamp: Date.now() });
+      session.history.push({ role: "assistant", content: resumeQ, timestamp: Date.now() });
+      await saveSession(session);
+      return { reply: resumeQ, dimension: session.currentDimension, finished: false, guardHit: true };
+    }
+    // Any other message → confirm done
+    session.history.push({ role: "user", content: message, timestamp: Date.now() });
+    const result = finalizeDone(session, lang);
+    await saveSession(session);
+    await logEvent(session.token, "interview_completed", `turns=${session.turnCount}`);
+    return result;
+  }
+
   // Internal sentinel sent when no speech was detected — always advance
   if (message === "__skip__") {
     const guardReply = getGuardReply("refusal", lang);
@@ -267,21 +366,63 @@ async function processMessage(session: InterviewSession, message: string): Promi
       const nextQ = getDimension(session.currentDimension).starterQuestions[lang][0]!;
       reply = `${guardReply} ${nextQ}`;
     } else if (session.finished) {
-      reply = getClosingMessage(lang);
-      session.history.push({ role: "assistant", content: reply, timestamp: Date.now() });
+      const result = enterAwaitFinal(session, lang);
       await saveSession(session);
-      await logEvent(session.token, "interview_completed", `turns=${session.turnCount}`);
-      return { reply, dimension: null, finished: true, guardHit: true };
+      await logEvent(session.token, "closing_started", `turns=${session.turnCount}`);
+      return result;
     }
     session.history.push({ role: "assistant", content: reply, timestamp: Date.now() });
     await saveSession(session);
     return { reply, dimension: session.currentDimension, finished: false, guardHit: true };
   }
 
-  const inputClass = classifyInput(message, lang);
+  // continue_request: advance to next dimension (await_final case already handled above)
+  const quickClass = classifyInput(message, lang);
+  if (quickClass === "continue_request") {
+    session.history.push({ role: "user", content: message, timestamp: Date.now() });
+    // Normal mid-interview continue — advance to next dimension
+    const advanced = advanceDimension(session);
+    if (!advanced || session.finished) {
+      const result = enterAwaitFinal(session, lang);
+      await saveSession(session);
+      await logEvent(session.token, "closing_started", `turns=${session.turnCount}`);
+      return result;
+    }
+
+    const continuePrefix: Record<Language, string> = {
+      en: "Sure, let's move on.\n\n",
+      ru: "Окей, идём дальше.\n\n",
+      tr: "Tamam, devam edelim.\n\n",
+    };
+    const nextQ = getDimension(session.currentDimension).starterQuestions[lang][0]!;
+    const reply = continuePrefix[lang] + nextQ;
+    session.history.push({ role: "assistant", content: reply, timestamp: Date.now() });
+    await saveSession(session);
+    await logEvent(session.token, "continue_requested", session.currentDimension, session.currentDimension);
+    return { reply, dimension: session.currentDimension, finished: false, guardHit: true };
+  }
+
+  const inputClass = quickClass;
   await logEvent(session.token, "user_response_received", message.slice(0, 80), session.currentDimension);
   await logEvent(session.token, "input_classified", inputClass, session.currentDimension);
 
+  // stop_signal: acknowledge + re-ask current D with a fresh question, no coverage/advance
+  if (inputClass === "stop_signal") {
+    await logEvent(session.token, "stop_signal_detected", message.slice(0, 80), session.currentDimension);
+    const ack = getGuardReply("stop_signal", lang);
+    const dim = getDimension(session.currentDimension);
+    const cov = session.coverage[session.currentDimension];
+    // Pick a fresh question from probes first, fall back to starters — skip already-asked ones
+    const candidates = [...dim.probeQuestions[lang], ...dim.starterQuestions[lang]];
+    const usedLower = session.history.filter(m => m.role === "assistant").map(m => m.content.toLowerCase());
+    const fresh = candidates.find(q => !usedLower.some(u => u.includes(q.toLowerCase().slice(0, 20))))
+      ?? dim.starterQuestions[lang][cov.turnCount % dim.starterQuestions[lang].length]!;
+    const reply = `${ack} ${fresh}`;
+    session.history.push({ role: "user", content: message, timestamp: Date.now() });
+    session.history.push({ role: "assistant", content: reply, timestamp: Date.now() });
+    await saveSession(session);
+    return { reply, dimension: session.currentDimension, finished: false, guardHit: true };
+  }
   const isPassThrough = inputClass === "valid_answer" || inputClass === "emoji_mixed" || inputClass === "emotion";
   if (!isPassThrough) return handleGuardedInput(session, inputClass, message, lang);
 
@@ -331,6 +472,16 @@ function textFingerprint(text: string): string {
 
 router.get("/:token", requireSession, (_req: Request, res: Response) => {
   return res.json(getSessionSummary(res.locals["session"] as InterviewSession));
+});
+
+router.post("/:token/silence-event", requireSession, async (req: Request, res: Response) => {
+  const session = res.locals["session"] as InterviewSession;
+  const { event } = req.body as { event?: string };
+  const allowed = ["silence_start", "silence_10s", "silence_20s", "silence_30s", "auto_skip_triggered", "user_continue_request"];
+  if (event && allowed.includes(event)) {
+    await logEvent(session.token, event, undefined, session.currentDimension);
+  }
+  return res.json({ ok: true });
 });
 
 router.post("/:token/language", requireSession, async (req: Request, res: Response) => {
@@ -394,10 +545,14 @@ router.post("/:token/demographics", requireSession, async (req: Request, res: Re
 router.post("/:token/message", requireSession, async (req: Request, res: Response) => {
   const session = res.locals["session"] as InterviewSession;
   if (!session.started) return res.status(400).json({ error: "Interview not started yet." });
-  if (session.finished) return res.status(400).json({ error: "Interview already finished." });
 
   const { message } = req.body as { message?: string };
   if (!message || typeof message !== "string") return res.status(400).json({ error: "message is required" });
+
+  // Allow continue_request even on a finished session, and any message during await_final
+  const isContinue = session.finished && classifyInput(message, session.language!) === "continue_request";
+  const isAwaitFinal = session.closingStage === "await_final";
+  if (session.finished && !isContinue && !isAwaitFinal) return res.status(400).json({ error: "Interview already finished." });
 
   const result = await processMessage(session, message);
   return res.json({ reply: result.reply, dimension: result.dimension, finished: result.finished });
@@ -405,10 +560,14 @@ router.post("/:token/message", requireSession, async (req: Request, res: Respons
 
 router.post("/:token/message/stream", requireSession, async (req: Request, res: Response) => {
   const session = res.locals["session"] as InterviewSession;
-  if (!session.started || session.finished) return res.status(400).json({ error: "Interview not active." });
+  if (!session.started) return res.status(400).json({ error: "Interview not active." });
 
   const { message } = req.body as { message?: string };
   if (!message || typeof message !== "string") return res.status(400).json({ error: "message is required" });
+
+  const isContinue = session.finished && classifyInput(message, session.language!) === "continue_request";
+  const isAwaitFinal = session.closingStage === "await_final";
+  if (session.finished && !isContinue && !isAwaitFinal) return res.status(400).json({ error: "Interview not active." });
 
   const result = await processMessage(session, message);
 
@@ -418,6 +577,47 @@ router.post("/:token/message/stream", requireSession, async (req: Request, res: 
   res.write(`data: ${JSON.stringify({ chunk: result.reply, done: false })}\n\n`);
   res.write(`data: ${JSON.stringify({ chunk: "", done: true, dimension: result.dimension, finished: result.finished })}\n\n`);
   res.end();
+});
+
+router.get("/:token/report", requireSession, (_req: Request, res: Response) => {
+  const session = res.locals["session"] as InterviewSession;
+
+  const dimensions = DIMENSION_ORDER.map((key) => {
+    const def = getDimension(key);
+    const cov = session.coverage[key];
+    const turnCount = cov?.turnCount ?? 0;
+    const signals: string[] = cov?.signals ?? [];
+    const depthLevel = cov?.depthLevel ?? 1;
+    const coverageScore = cov?.coverageScore ?? 0;
+
+    let status: "deep" | "moderate" | "light" | "skipped" = "skipped";
+    if (turnCount >= def.maxTurns || coverageScore >= 0.75) status = "deep";
+    else if (turnCount >= def.minTurns) status = "moderate";
+    else if (turnCount > 0) status = "light";
+
+    return { key, name: `${key} — ${def.name.en}`, focus: def.focus.en, turnCount, coverageScore, depthLevel, signals, status };
+  });
+
+  const coveredCount = dimensions.filter((d) => d.status !== "skipped").length;
+  const overallCoverage = dimensions.length > 0 ? coveredCount / dimensions.length : 0;
+  const strongDimensions = dimensions.filter((d) => d.status === "deep").map((d) => d.name);
+  const weakDimensions = dimensions.filter((d) => d.status === "light" || d.status === "skipped").map((d) => d.name);
+
+  const signalFreq: Record<string, number> = {};
+  for (const sig of dimensions.flatMap((d) => d.signals)) signalFreq[sig] = (signalFreq[sig] ?? 0) + 1;
+  const keyThemes = Object.entries(signalFreq).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([sig]) => sig);
+
+  return res.json({
+    token: session.token,
+    projectId: session.projectId,
+    language: session.language,
+    demographics: session.demographics ?? null,
+    completedAt: session.lastActivityAt,
+    totalTurns: session.turnCount,
+    totalQuestions: session.questionCount,
+    dimensions,
+    summary: { overallCoverage, strongDimensions, weakDimensions, keyThemes },
+  });
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

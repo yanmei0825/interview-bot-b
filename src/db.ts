@@ -36,7 +36,8 @@ export async function initDb(): Promise<void> {
     CREATE TABLE IF NOT EXISTS sessions (
       token TEXT PRIMARY KEY,
       data TEXT NOT NULL,
-      lastActivityAt INTEGER NOT NULL
+      lastActivityAt INTEGER NOT NULL,
+      expiresAt INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS events (
@@ -50,4 +51,10 @@ export async function initDb(): Promise<void> {
 
     CREATE INDEX IF NOT EXISTS idx_events_token ON events(token);
   `);
+  // Migration: add expiresAt if it doesn't exist yet (safe on existing DBs)
+  try {
+    await db.execute("ALTER TABLE sessions ADD COLUMN expiresAt INTEGER");
+  } catch {
+    // Column already exists — ignore
+  }
 }
