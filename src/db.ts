@@ -7,8 +7,7 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const db: Database.Database = new Database(path.join(DATA_DIR, "interview.db"));
 
-// Enable WAL mode for better concurrent read performance
-db.pragma("journal_mode = WAL");
+
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS companies (

@@ -23,6 +23,17 @@ if (!fs.existsSync(voiceStoragePath)) {
   fs.mkdirSync(voiceStoragePath, { recursive: true });
 }
 
+// ── Static routes MUST come before /:token dynamic routes ────────────────────
+router.post("/public-session", (req: Request, res: Response) => {
+  const { projectId } = req.body as { projectId?: string };
+  if (!projectId) return res.status(400).json({ error: "projectId is required" });
+  const project = getProject(projectId);
+  if (!project) return res.status(404).json({ error: "Project not found" });
+  const session = createSession(projectId, project.demographicsEnabled);
+  logEvent(session.token, "session_created", projectId);
+  return res.status(201).json({ token: session.token });
+});
+
 router.post("/:token/voice/send", async (req: Request, res: Response) => {
   try {
     const token = req.params.token as string;
@@ -485,16 +496,6 @@ function textFingerprint(text: string): string {
     .slice(0, 10)
     .join(" ");
 }
-
-router.post("/public-session", (req: Request, res: Response) => {
-  const { projectId } = req.body as { projectId?: string };
-  if (!projectId) return res.status(400).json({ error: "projectId is required" });
-  const project = getProject(projectId);
-  if (!project) return res.status(404).json({ error: "Project not found" });
-  const session = createSession(projectId, project.demographicsEnabled);
-  logEvent(session.token, "session_created", projectId);
-  return res.status(201).json({ token: session.token });
-});
 
 router.get("/:token", (req: Request, res: Response) => {
   const session = getSession(String(req.params["token"]));
