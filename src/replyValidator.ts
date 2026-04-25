@@ -50,6 +50,8 @@ function stripFillerOpener(text: string): string {
   return text;
 }
 
+const ADVICE_MARKERS = /\b(you should|you could|i suggest|i recommend|try to|make sure|consider|it would help|it might help)\b/i;
+
 export function validateReply(
   reply: string,
   lang: Language,
@@ -121,10 +123,8 @@ export function validateReply(
     text = getFallback(lang);
   }
 
-  const adviceMarkers = /\b(you should|you could|i suggest|i recommend|try to|make sure|consider|it would help|it might help)\b/i;
-  if (adviceMarkers.test(text)) {
+  if (ADVICE_MARKERS.test(text)) {
     violations.push("advice_detected");
-    const sentences = countSentences(text);
     const questionSentence = sentences.find((s) => s.includes("?"));
     text = questionSentence ?? getFallback(lang);
   }

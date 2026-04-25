@@ -1,4 +1,4 @@
-import { Router, Request, Response } from "express";
+import { Router, Request, Response, NextFunction } from "express";
 import {
   createSession, getSession, saveSession, logEvent,
   advanceDimension, shouldAdvance, getSessionSummary, updateDimensionMetrics,
@@ -23,6 +23,24 @@ if (!fs.existsSync(voiceStoragePath)) {
   fs.mkdirSync(voiceStoragePath, { recursive: true });
 }
 
+// ── Shared middleware ─────────────────────────────────────────────────────────
+
+/** Attaches session to res.locals or returns 404. */
+function requireSession(req: Request, res: Response, next: NextFunction) {
+  const token = String(req.params.token ?? "");
+  const session = getSession(token);
+  if (!session) return res.status(404).json({ error: "Session not found" });
+  res.locals.session = session;
+  next();
+}
+
+/** Requires session to have a language set. */
+function requireLanguage(_req: Request, res: Response, next: NextFunction) {
+  const session = res.locals.session as InterviewSession;
+  if (!session.language) return res.status(400).json({ error: "Language not selected" });
+  next();
+}
+
 // ── Static routes MUST come before /:token dynamic routes ────────────────────
 router.post("/public-session", (req: Request, res: Response) => {
   const { projectId } = req.body as { projectId?: string };
@@ -34,59 +52,33 @@ router.post("/public-session", (req: Request, res: Response) => {
   return res.status(201).json({ token: session.token });
 });
 
-router.post("/:token/voice/send", async (req: Request, res: Response) => {
+router.post("/:token/voice/send", requireSession, requireLanguage, async (req: Request, res: Response) => {
   try {
-    const token = req.params.token as string;
-    
-    if (!token) {
-      return res.status(400).json({ error: "Token is required" });
-    }
-
-    const session = getSession(token);
-    if (!session) {
-      return res.status(404).json({ error: "Session not found" });
-    }
-
-    if (!session.language) {
-      return res.status(400).json({ error: "Language not selected" });
-    }
-
+    const session = res.locals.session as InterviewSession;
     const audioBuffer = req.body;
+
     if (!audioBuffer || (Buffer.isBuffer(audioBuffer) && audioBuffer.length === 0)) {
       return res.status(400).json({ error: "No audio provided" });
     }
 
-    console.log(`[Voice Send] Token: ${token}, Audio size: ${Buffer.isBuffer(audioBuffer) ? audioBuffer.length : 'unknown'}`);
-
-    const voiceFileName = `voice_${token}_${Date.now()}.webm`;
+    const voiceFileName = `voice_${session.token}_${Date.now()}.webm`;
     const voiceFilePath = path.join(voiceStoragePath, voiceFileName);
-
     fs.writeFileSync(voiceFilePath, audioBuffer);
-    console.log(`[Voice Send] Saved: ${voiceFilePath}`);
 
-    const voiceMessage = {
-      type: "voice",
-      fileName: voiceFileName,
-      filePath: `/voice_files/${voiceFileName}`,
-      size: Buffer.isBuffer(audioBuffer) ? audioBuffer.length : 0,
-      timestamp: Date.now(),
-      language: session.language,
-    };
-
-    session.history.push({
-      role: "user",
-      content: `[Voice Message: ${voiceFileName}]`,
-      timestamp: Date.now(),
-    });
-
-    logEvent(token, "voice_sent", voiceFileName, session.currentDimension);
+    session.history.push({ role: "user", content: `[Voice Message: ${voiceFileName}]`, timestamp: Date.now() });
+    logEvent(session.token, "voice_sent", voiceFileName, session.currentDimension);
     saveSession(session);
 
     res.json({
       success: true,
-      message: "Voice file received",
-      voiceFile: voiceMessage,
-      sessionUpdated: true,
+      voiceFile: {
+        type: "voice",
+        fileName: voiceFileName,
+        filePath: `/voice_files/${voiceFileName}`,
+        size: Buffer.isBuffer(audioBuffer) ? audioBuffer.length : 0,
+        timestamp: Date.now(),
+        language: session.language,
+      },
     });
   } catch (err: any) {
     console.error("[Voice Send Error]", err);
@@ -94,137 +86,69 @@ router.post("/:token/voice/send", async (req: Request, res: Response) => {
   }
 });
 
-router.post("/:token/voice/transcribe", async (req: Request, res: Response) => {
-  console.log("-=-=-=-------------------");
+router.post("/:token/voice/transcribe", requireSession, requireLanguage, async (req: Request, res: Response) => {
   try {
-    const token = req.params.token as string;
-    
-    if (!token) {
-      return res.status(400).json({ error: "Token is required" });
-    }
-
-    const session = getSession(token);
-    if (!session) {
-      return res.status(404).json({ error: "Session not found" });
-    }
-
-    if (!session.language) {
-      return res.status(400).json({ error: "Language not selected" });
-    }
-
+    const session = res.locals.session as InterviewSession;
     const audioBuffer = req.body;
+
     if (!audioBuffer || (Buffer.isBuffer(audioBuffer) && audioBuffer.length === 0)) {
       return res.status(400).json({ error: "No audio provided" });
     }
 
-    console.log(`[Voice Transcribe] Token: ${token}, Audio size: ${Buffer.isBuffer(audioBuffer) ? audioBuffer.length : 'unknown'}`);
-
-    const result = await speechToText(audioBuffer, session.language);
-
-    logEvent(token, "voice_transcribed", result.text.slice(0, 80), session.currentDimension);
-
-    session.history.push({
-      role: "user",
-      content: result.text,
-      timestamp: Date.now(),
-    });
+    const result = await speechToText(audioBuffer, session.language!);
+    logEvent(session.token, "voice_transcribed", result.text.slice(0, 80), session.currentDimension);
+    session.history.push({ role: "user", content: result.text, timestamp: Date.now() });
     saveSession(session);
 
-    res.json({
-      text: result.text,
-      confidence: result.confidence,
-      language: result.language,
-      duration: result.duration,
-    });
+    res.json({ text: result.text, confidence: result.confidence, language: result.language, duration: result.duration });
   } catch (err: any) {
     console.error("[Voice Transcribe Error]", err);
     res.status(500).json({ error: err.message });
   }
 });
 
-router.post("/:token/voice/speak/stream", async (req: Request, res: Response) => {
+router.post("/:token/voice/speak/stream", requireSession, requireLanguage, async (req: Request, res: Response) => {
   try {
-    const token = req.params.token as string;
-    console.log(`[Voice Speak] Received request for token: ${token}`);
-    
-    if (!token) {
-      return res.status(400).json({ error: "Token is required" });
-    }
-
-    const { text, speed, pitch, voiceGender } = req.body;
-    console.log(`[Voice Speak] Body: text=${text?.slice(0, 50)}, speed=${speed}, pitch=${pitch}, voiceGender=${voiceGender}`);
-
-    const session = getSession(token);
-    if (!session) {
-      console.log(`[Voice Speak] Session not found for token: ${token}`);
-      return res.status(404).json({ error: "Session not found" });
-    }
-
-    if (!session.language) {
-      return res.status(400).json({ error: "Language not selected" });
-    }
+    const session = res.locals.session as InterviewSession;
+    const { text, speed, voiceGender } = req.body as {
+      text?: string; speed?: number; voiceGender?: string;
+    };
 
     if (!text || text.length === 0) {
       return res.status(400).json({ error: "No text provided" });
     }
 
-    console.log(`[Voice Speak] Generating TTS for: ${text.slice(0, 50)}`);
-
     const options: TTSOptions = {
       speed: speed ?? 1.0,
-      pitch: pitch ?? 1.0,
-      voiceGender: voiceGender ?? "neutral",
+      voiceGender: (voiceGender as TTSOptions["voiceGender"]) ?? "neutral",
     };
 
-    let result;
+    let audioBuffer: ArrayBuffer;
+    let mimeType: string;
+
     try {
-      result = await textToSpeech(text, session.language, options);
+      const result = await textToSpeech(text, session.language!, options);
+      audioBuffer = result.audioBuffer;
+      mimeType = result.mimeType;
     } catch (err: any) {
-      console.error("[Voice Speak] TTS failed, using mock audio:", err.message);
-      const silentMP3 = Buffer.from([
-        0xFF, 0xFB, 0x90, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-      ]);
-      result = {
-        audioBuffer: silentMP3.buffer,
-        mimeType: "audio/mpeg",
-        duration: 1000,
-      };
+      console.error("[Voice Speak] TTS failed, using silent fallback:", err.message);
+      // Minimal valid MP3 frame so the client gets a parseable response
+      audioBuffer = Buffer.from([0xFF, 0xFB, 0x90, 0x00, ...new Array(172).fill(0x00)]).buffer;
+      mimeType = "audio/mpeg";
     }
 
-    if (!result) {
-      return res.status(500).json({ error: "Failed to generate audio" });
-    }
-
-    console.log(`[Voice Speak] TTS result: ${result.audioBuffer.byteLength} bytes, mimeType: ${result.mimeType}`);
-
-    logEvent(token, "voice_generated_stream", text.slice(0, 80));
-
-    res.setHeader("Content-Type", result.mimeType);
-    res.send(Buffer.from(result.audioBuffer));
+    logEvent(session.token, "voice_generated_stream", text.slice(0, 80));
+    res.setHeader("Content-Type", mimeType);
+    res.send(Buffer.from(audioBuffer));
   } catch (err: any) {
-    console.error("[Voice Speak Stream Error]", err);
+    console.error("[Voice Speak Error]", err);
     res.status(500).json({ error: err.message });
   }
 });
 
-router.post("/:token/voice/analyze", async (req: Request, res: Response) => {
+router.post("/:token/voice/analyze", requireSession, async (req: Request, res: Response) => {
   try {
-    const token = req.params.token as string;
+    const session = res.locals.session as InterviewSession;
     const { text, language, confidence, duration } = req.body as {
       text?: string;
       language?: Language;
@@ -236,24 +160,11 @@ router.post("/:token/voice/analyze", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "text and language are required" });
     }
 
-    const session = getSession(token);
-    if (!session) {
-      return res.status(404).json({ error: "Session not found" });
-    }
-
-    const limitResult = enforceCharacterLimit(text, 500, 100, language);
-
+    const { truncated } = enforceCharacterLimit(text, 500, 100, language);
     const qualityMetrics = assessVoiceQuality(new ArrayBuffer(0), duration ?? 0);
+    const analysis = analyzeVoiceInput(truncated, language, qualityMetrics, confidence ?? 0.85);
 
-    const analysis = analyzeVoiceInput(
-      limitResult.truncated,
-      language,
-      qualityMetrics,
-      confidence ?? 0.85
-    );
-
-    logEvent(token, "voice_analyzed", `${analysis.wordCount} words, ${analysis.sentiment}`, session.currentDimension);
-
+    logEvent(session.token, "voice_analyzed", `${analysis.wordCount} words, ${analysis.sentiment}`, session.currentDimension);
     res.json(analysis);
   } catch (err: any) {
     console.error("[Voice Analyze Error]", err);
@@ -269,118 +180,118 @@ interface ProcessResult {
   guardHit: boolean;
 }
 
-async function processMessage(session: InterviewSession, message: string): Promise<ProcessResult> {
-  const lang = session.language!;
+/** Resolves a voice-message placeholder to its transcribed text. */
+async function resolveVoiceMessage(message: string, lang: Language): Promise<string> {
+  const match = message.match(/\[Voice: (\/voice_files\/[^\]]+)\]/);
+  if (!match?.[1]) return message;
 
-  let processedMessage = message;
-  if (message.includes("[Voice:")) {
-    const voiceMatch = message.match(/\[Voice: (\/voice_files\/[^\]]+)\]/);
-    if (voiceMatch && voiceMatch[1]) {
-      const voiceFilePath = voiceMatch[1];
-      const fullPath = path.join(process.cwd(), voiceFilePath);
-      
-      try {
-        if (fs.existsSync(fullPath)) {
-          const audioBuffer = fs.readFileSync(fullPath);
-          const transcriptionResult = await speechToText(audioBuffer as any, lang);
-          processedMessage = transcriptionResult.text;
-          console.log(`[Voice Transcription] Transcribed: ${processedMessage}`);
-        } else {
-          console.warn(`[Voice Transcription] File not found: ${fullPath}`);
-          processedMessage = "I sent a voice message but it couldn't be transcribed.";
-        }
-      } catch (err: any) {
-        console.error(`[Voice Transcription Error]`, err);
-        processedMessage = "I sent a voice message but there was an error transcribing it.";
-      }
+  const fullPath = path.join(process.cwd(), match[1]);
+  try {
+    if (!fs.existsSync(fullPath)) {
+      console.warn(`[Voice] File not found: ${fullPath}`);
+      return "I sent a voice message but it couldn't be transcribed.";
     }
+    const audioBuffer = fs.readFileSync(fullPath);
+    const { text } = await speechToText(audioBuffer as unknown as ArrayBuffer, lang);
+    return text;
+  } catch (err: any) {
+    console.error("[Voice Transcription Error]", err.message);
+    return "I sent a voice message but there was an error transcribing it.";
   }
+}
 
-  const inputClass = classifyInput(processedMessage, lang);
-  logEvent(session.token, "user_response_received", processedMessage.slice(0, 80), session.currentDimension);
-  logEvent(session.token, "input_classified", inputClass, session.currentDimension);
+/** Handles inputs that don't pass through to the LLM (guard hits). */
+function handleGuardedInput(
+  session: InterviewSession,
+  inputClass: string,
+  processedMessage: string,
+  lang: Language
+): ProcessResult {
+  const guardReply = getGuardReply(inputClass as any, lang);
+  const dim = getDimension(session.currentDimension);
+  const cov = session.coverage[session.currentDimension];
 
-  const cleanMessage = (inputClass === "emoji_mixed" || inputClass === "emotion")
-    ? stripEmoji(processedMessage) : processedMessage;
+  const pushHistory = (userContent: string, botContent: string) => {
+    session.history.push({ role: "user", content: userContent, timestamp: Date.now() });
+    session.history.push({ role: "assistant", content: botContent, timestamp: Date.now() });
+  };
 
-  const isPassThrough = inputClass === "valid_answer" || inputClass === "emoji_mixed" || inputClass === "emotion";
-
-  if (!isPassThrough) {
-    const guardReply = getGuardReply(inputClass, lang);
-    let reply = guardReply;
-
-    if (inputClass === "wrong_language") {
-      // remind and re-ask last question
-      const lastBotMsg = session.history.filter(m => m.role === "assistant").slice(-1)[0]?.content ?? "";
-      reply = lastBotMsg ? `${guardReply} ${lastBotMsg}` : guardReply;
-      session.history.push({ role: "user", content: processedMessage, timestamp: Date.now() });
-      session.history.push({ role: "assistant", content: reply, timestamp: Date.now() });
-      saveSession(session);
-      return { reply, dimension: session.currentDimension, finished: false, guardHit: true };
-    } else if (inputClass === "off_topic") {
-      const dim = getDimension(session.currentDimension);
-      reply = `${guardReply} ${dim.starterQuestions[lang][0]!}`;
-    } else if (inputClass === "refusal") {
-      session.history.push({ role: "user", content: processedMessage, timestamp: Date.now() });
-      session.history.push({ role: "assistant", content: guardReply, timestamp: Date.now() });
-      const advanced = advanceDimension(session);
-      let finalReply = guardReply;
-      if (advanced && !session.finished) {
-        const nextDim = getDimension(session.currentDimension);
-        const nextQ = nextDim.starterQuestions[lang][0]!;
-        finalReply = `${guardReply} ${nextQ}`;
-        session.history[session.history.length - 1] = { role: "assistant", content: finalReply, timestamp: Date.now() };
-      }
-      saveSession(session);
-      return { reply: finalReply, dimension: session.currentDimension, finished: session.finished, guardHit: true };
-    } else if (inputClass === "confusion") {
-      const dim = getDimension(session.currentDimension);
-      const probes = dim.probeQuestions[lang];
-      const usedAssistant = session.history
-        .filter((m) => m.role === "assistant")
-        .map((m) => m.content.toLowerCase());
-      const freshProbe = probes.find(
-        (p) => !usedAssistant.some((used) => used.includes(p.toLowerCase().slice(0, 15)))
-      ) ?? probes[session.coverage[session.currentDimension].turnCount % probes.length] ?? probes[0]!;
-      reply = freshProbe;
-    } else if (inputClass === "too_long") {
-      session.coverage[session.currentDimension].turnCount++;
-      session.turnCount++;
-      updateDimensionMetrics(session);
-      session.history.push({ role: "user", content: processedMessage.slice(0, 200) + "...", timestamp: Date.now() });
-      session.history.push({ role: "assistant", content: guardReply, timestamp: Date.now() });
-      saveSession(session);
-      return { reply: guardReply, dimension: session.currentDimension, finished: session.finished, guardHit: true };
-    } else if (inputClass === "gibberish" || inputClass === "too_short") {
-      const dim = getDimension(session.currentDimension);
-      const idx = session.coverage[session.currentDimension].turnCount % dim.starterQuestions[lang].length;
-      reply = `${guardReply} ${dim.starterQuestions[lang][idx] ?? dim.starterQuestions[lang][0]!}`;
-    }
-
-    session.history.push({ role: "user", content: message, timestamp: Date.now() });
-    session.history.push({ role: "assistant", content: reply, timestamp: Date.now() });
+  const done = (reply: string): ProcessResult => {
     saveSession(session);
     return { reply, dimension: session.currentDimension, finished: session.finished, guardHit: true };
+  };
+
+  if (inputClass === "wrong_language") {
+    const lastBotMsg = session.history.filter(m => m.role === "assistant").slice(-1)[0]?.content ?? "";
+    const reply = lastBotMsg ? `${guardReply} ${lastBotMsg}` : guardReply;
+    pushHistory(processedMessage, reply);
+    return done(reply);
   }
 
-  const signals = extractSignals(cleanMessage, session.currentDimension);
-  const sentiment = detectSentiment(cleanMessage);
-  session.coverage[session.currentDimension].signals.push(...signals);
-  session.coverage[session.currentDimension].turnCount++;
+  if (inputClass === "refusal") {
+    pushHistory(processedMessage, guardReply);
+    const advanced = advanceDimension(session);
+    let reply = guardReply;
+    if (advanced && !session.finished) {
+      const nextQ = getDimension(session.currentDimension).starterQuestions[lang][0]!;
+      reply = `${guardReply} ${nextQ}`;
+      session.history[session.history.length - 1] = { role: "assistant", content: reply, timestamp: Date.now() };
+    }
+    return done(reply);
+  }
+
+  if (inputClass === "too_long") {
+    cov.turnCount++;
+    session.turnCount++;
+    updateDimensionMetrics(session);
+    pushHistory(processedMessage.slice(0, 200) + "...", guardReply);
+    return done(guardReply);
+  }
+
+  // Build reply for remaining guard types
+  let reply = guardReply;
+  if (inputClass === "off_topic") {
+    reply = `${guardReply} ${dim.starterQuestions[lang][0]!}`;
+  } else if (inputClass === "confusion") {
+    const usedLower = session.history.filter(m => m.role === "assistant").map(m => m.content.toLowerCase());
+    reply = dim.probeQuestions[lang].find(
+      p => !usedLower.some(used => used.includes(p.toLowerCase().slice(0, 15)))
+    ) ?? dim.probeQuestions[lang][cov.turnCount % dim.probeQuestions[lang].length] ?? dim.probeQuestions[lang][0]!;
+  } else if (inputClass === "gibberish" || inputClass === "too_short") {
+    const idx = cov.turnCount % dim.starterQuestions[lang].length;
+    reply = `${guardReply} ${dim.starterQuestions[lang][idx] ?? dim.starterQuestions[lang][0]!}`;
+  }
+
+  pushHistory(processedMessage, reply);
+  return done(reply);
+}
+
+/** Handles valid inputs — updates metrics, calls LLM, advances dimension. */
+async function handleValidInput(
+  session: InterviewSession,
+  cleanMessage: string,
+  inputClass: string,
+  lang: Language
+): Promise<ProcessResult> {
+  const cov = session.coverage[session.currentDimension];
+
+  // Record signals and update metrics
+  cov.signals.push(...extractSignals(cleanMessage, session.currentDimension));
+  cov.turnCount++;
   session.turnCount++;
-  logEvent(session.token, `sentiment_${sentiment}`, undefined, session.currentDimension);
+  logEvent(session.token, `sentiment_${detectSentiment(cleanMessage)}`, undefined, session.currentDimension);
   updateDimensionMetrics(session);
   session.history.push({ role: "user", content: cleanMessage, timestamp: Date.now() });
 
   if (inputClass === "emotion") {
-    const ack = getGuardReply("emotion", lang);
-    session.history.push({ role: "assistant", content: ack, timestamp: Date.now() });
+    session.history.push({ role: "assistant", content: getGuardReply("emotion", lang), timestamp: Date.now() });
   }
 
+  // Check if we should move to the next dimension
   if (shouldAdvance(session)) {
     const prevDim = session.currentDimension;
     const hasNext = advanceDimension(session);
-    logEvent(session.token, "dimension_completed", prevDim, prevDim as any);
+    logEvent(session.token, "dimension_completed", prevDim, prevDim as DimensionKey);
     if (!hasNext) {
       const closing = getClosingMessage(lang);
       session.history.push({ role: "assistant", content: closing, timestamp: Date.now() });
@@ -391,8 +302,16 @@ async function processMessage(session: InterviewSession, message: string): Promi
     logEvent(session.token, "dimension_started", session.currentDimension, session.currentDimension);
   }
 
-  // Try LLM first, fall back to curated questions
-  let nextQuestion = "";
+  const nextQuestion = await resolveNextQuestion(session, lang);
+  const finalQuestion = safeAddBotQuestion(session, nextQuestion, lang);
+  saveSession(session);
+  logEvent(session.token, "question_generated", finalQuestion.slice(0, 80), session.currentDimension);
+  session.questionCount++;
+  return { reply: finalQuestion, dimension: session.currentDimension, finished: false, guardHit: false };
+}
+
+/** Gets the next question from LLM with curated fallback. */
+async function resolveNextQuestion(session: InterviewSession, lang: Language): Promise<string> {
   try {
     const rawReply = await getLLMReply(session);
     if (rawReply) {
@@ -401,25 +320,41 @@ async function processMessage(session: InterviewSession, message: string): Promi
       if (validated.violations.length > 0) {
         logEvent(session.token, "reply_violations", validated.violations.join(","), session.currentDimension);
       }
-      nextQuestion = validated.reply;
+      if (validated.reply) return validated.reply;
     }
   } catch (err: any) {
     console.error("[LLM Error] Falling back to curated questions:", err.message);
   }
 
-  if (!nextQuestion) {
-    const dim = getDimension(session.currentDimension);
-    const allQuestions = [...dim.starterQuestions[lang], ...dim.probeQuestions[lang]];
-    nextQuestion = pickFresh(allQuestions, session.history, session.askedQuestionFps)
-      ?? getFallback(lang, session.currentDimension, session.history)
-      ?? allQuestions[0]!;
+  const dim = getDimension(session.currentDimension);
+  const allQuestions = [...dim.starterQuestions[lang], ...dim.probeQuestions[lang]];
+  return pickFresh(allQuestions, session.history, session.askedQuestionFps)
+    ?? getFallback(lang, session.currentDimension, session.history)
+    ?? allQuestions[0]!;
+}
+
+async function processMessage(session: InterviewSession, message: string): Promise<ProcessResult> {
+  const lang = session.language!;
+
+  const processedMessage = message.includes("[Voice:")
+    ? await resolveVoiceMessage(message, lang)
+    : message;
+
+  const inputClass = classifyInput(processedMessage, lang);
+  logEvent(session.token, "user_response_received", processedMessage.slice(0, 80), session.currentDimension);
+  logEvent(session.token, "input_classified", inputClass, session.currentDimension);
+
+  const isPassThrough = inputClass === "valid_answer" || inputClass === "emoji_mixed" || inputClass === "emotion";
+
+  if (!isPassThrough) {
+    return handleGuardedInput(session, inputClass, processedMessage, lang);
   }
 
-  const finalQuestion = safeAddBotQuestion(session, nextQuestion, lang);
-  saveSession(session);
-  logEvent(session.token, "question_generated", finalQuestion.slice(0, 80), session.currentDimension);
-  session.questionCount++;
-  return { reply: finalQuestion, dimension: session.currentDimension, finished: false, guardHit: false };
+  const cleanMessage = (inputClass === "emoji_mixed" || inputClass === "emotion")
+    ? stripEmoji(processedMessage)
+    : processedMessage;
+
+  return handleValidInput(session, cleanMessage, inputClass, lang);
 }
 
 function safeAddBotQuestion(
@@ -497,15 +432,12 @@ function textFingerprint(text: string): string {
     .join(" ");
 }
 
-router.get("/:token", (req: Request, res: Response) => {
-  const session = getSession(String(req.params["token"]));
-  if (!session) return res.status(404).json({ error: "Session not found" });
-  return res.json(getSessionSummary(session));
+router.get("/:token", requireSession, (req: Request, res: Response) => {
+  return res.json(getSessionSummary(res.locals.session as InterviewSession));
 });
 
-router.post("/:token/language", async (req: Request, res: Response) => {
-  const session = getSession(String(req.params["token"]));
-  if (!session) return res.status(404).json({ error: "Session not found" });
+router.post("/:token/language", requireSession, async (req: Request, res: Response) => {
+  const session = res.locals.session as InterviewSession;
   if (session.started) return res.status(409).json({ error: "Language already locked." });
 
   const { language } = req.body as { language?: string };
@@ -523,7 +455,7 @@ router.post("/:token/language", async (req: Request, res: Response) => {
   if (!session.demographicsEnabled) {
     session.started = true;
     session.state = "INTERVIEW";
-    const intro = await getIntroMessage(session);
+    const intro = getIntroMessage(session);
     session.history.push({ role: "assistant", content: intro, timestamp: Date.now() });
     saveSession(session);
     logEvent(session.token, "interview_started", session.projectId);
@@ -535,9 +467,8 @@ router.post("/:token/language", async (req: Request, res: Response) => {
   return res.json({ message: "Language set. Please submit demographics." });
 });
 
-router.post("/:token/demographics", async (req: Request, res: Response) => {
-  const session = getSession(String(req.params["token"]));
-  if (!session) return res.status(404).json({ error: "Session not found" });
+router.post("/:token/demographics", requireSession, async (req: Request, res: Response) => {
+  const session = res.locals.session as InterviewSession;
   if (!session.demographicsEnabled) return res.status(400).json({ error: "Demographics not enabled." });
   if (session.demographicsSubmitted) return res.status(409).json({ error: "Demographics already submitted." });
   if (!session.language) return res.status(400).json({ error: "Set language before submitting demographics." });
@@ -555,7 +486,7 @@ router.post("/:token/demographics", async (req: Request, res: Response) => {
   session.state = "INTERVIEW";
   logEvent(session.token, "demographics_submitted");
 
-  const intro = await getIntroMessage(session);
+  const intro = getIntroMessage(session);
   session.history.push({ role: "assistant", content: intro, timestamp: Date.now() });
   saveSession(session);
   logEvent(session.token, "interview_started", session.projectId);
@@ -563,63 +494,43 @@ router.post("/:token/demographics", async (req: Request, res: Response) => {
   return res.json({ message: "Demographics saved. Interview started.", intro });
 });
 
-router.post("/:token/message", async (req: Request, res: Response) => {
-  const session = getSession(String(req.params["token"]));
-  if (!session) return res.status(404).json({ error: "Session not found" });
+router.post("/:token/message", requireSession, async (req: Request, res: Response) => {
+  const session = res.locals.session as InterviewSession;
   if (!session.started) return res.status(400).json({ error: "Interview not started yet." });
   if (session.finished) return res.status(400).json({ error: "Interview already finished." });
 
   const { message } = req.body as { message?: string };
   if (!message || typeof message !== "string") return res.status(400).json({ error: "message is required" });
 
-  const lang = session.language!;
   const result = await processMessage(session, message);
-
-  if (result.guardHit || result.finished) {
-    return res.json({ reply: result.reply, dimension: result.dimension, finished: result.finished });
-  }
-
   return res.json({ reply: result.reply, dimension: result.dimension, finished: result.finished });
 });
 
-router.post("/:token/message/stream", async (req: Request, res: Response) => {
-  const session = getSession(String(req.params["token"]));
-  if (!session) return res.status(404).json({ error: "Session not found" });
+router.post("/:token/message/stream", requireSession, async (req: Request, res: Response) => {
+  const session = res.locals.session as InterviewSession;
   if (!session.started || session.finished) return res.status(400).json({ error: "Interview not active." });
 
   const { message } = req.body as { message?: string };
   if (!message || typeof message !== "string") return res.status(400).json({ error: "message is required" });
 
-  const lang = session.language!;
   const result = await processMessage(session, message);
 
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
-
-  if (result.guardHit || result.finished) {
-    res.write(`data: ${JSON.stringify({ chunk: result.reply, done: false })}\n\n`);
-    res.write(`data: ${JSON.stringify({ chunk: "", done: true, dimension: result.dimension, finished: result.finished })}\n\n`);
-    res.end();
-    return;
-  }
-
   res.write(`data: ${JSON.stringify({ chunk: result.reply, done: false })}\n\n`);
   res.write(`data: ${JSON.stringify({ chunk: "", done: true, dimension: result.dimension, finished: result.finished })}\n\n`);
   res.end();
 });
 
-router.get("/:token/report", (req: Request, res: Response) => {
-  const session = getSession(String(req.params["token"]));
-  if (!session) return res.status(404).json({ error: "Session not found" });
+router.get("/:token/report", requireSession, (req: Request, res: Response) => {
+  const session = res.locals.session as InterviewSession;
   if (!session.finished) return res.status(400).json({ error: "Interview not completed yet" });
-
-  const lang = session.language as Language;
-  const report = generateReport(session, lang);
+  const report = generateReport(session, session.language as Language);
   return res.json(report);
 });
 
-async function getIntroMessage(session: InterviewSession): Promise<string> {
+function getIntroMessage(session: InterviewSession): string {
   const lang = session.language as Language;
   const intros: Record<Language, string> = {
     en: "Hey — thanks for taking the time. This is a short anonymous conversation about your work experience. No right or wrong answers, just your honest take. Ready to start?",

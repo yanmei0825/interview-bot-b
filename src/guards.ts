@@ -18,25 +18,23 @@ export function detectLanguage(text: string): Language | null {
   return null;
 }
 
-export function isWrongLanguage(text: string, expected: Language): boolean {
+function isWrongLanguage(text: string, expected: Language): boolean {
   const detected = detectLanguage(text);
   if (!detected) return false;
   return detected !== expected;
 }
 
 export type InputType =
-  | "valid_answer"   
-  | "refusal"        
-  | "off_topic"      
-  | "gibberish"    
-  | "too_short"       
-  | "too_long"      
-  | "emotion"         
-  | "confusion"       
-  | "wrong_language"  
-  | "emoji_mixed";   
-
-export type InputClass = InputType;
+  | "valid_answer"
+  | "refusal"
+  | "off_topic"
+  | "gibberish"
+  | "too_short"
+  | "too_long"
+  | "emotion"
+  | "confusion"
+  | "wrong_language"
+  | "emoji_mixed";
 
 const MIN_CHARS = 2;
 const MAX_CHARS = 1200;

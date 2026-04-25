@@ -227,16 +227,10 @@ async function getLLMReplyFromOpenAI(
       logEvent(session.token, "llm_usage", `prompt=${response.usage.prompt_tokens} completion=${response.usage.completion_tokens}`);
     }
 
-    for (let i = 0; i < 2; i++) {
-      const parsed = parseLLMOutput(
-        response.choices[0]?.message?.content?.trim() ?? ""
-      );
-
-      if (!isReplyDuplicate(parsed, session.history)) {
-        return parsed;
-      }
+    const parsed = parseLLMOutput(response.choices[0]?.message?.content?.trim() ?? "");
+    if (!isReplyDuplicate(parsed, session.history)) {
+      return parsed;
     }
-
     return "";
   } catch (err: any) {
     console.error("[OpenAI REQUEST FAILED]", {

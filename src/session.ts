@@ -188,7 +188,6 @@ function questionFp(text: string): string {
 }
 
 export function isQuestionAlreadyAsked(session: InterviewSession, question: string): boolean {
-  if (!session.askedQuestionFps) session.askedQuestionFps = [];
   const qLower = question.toLowerCase().trim();
   const fp = questionFp(question);
   if (!fp || fp.length < 5) return false;
@@ -220,7 +219,6 @@ export function isQuestionAlreadyAsked(session: InterviewSession, question: stri
 }
 
 export function registerQuestion(session: InterviewSession, question: string): void {
-  if (!session.askedQuestionFps) session.askedQuestionFps = [];
   const fp = questionFp(question);
   if (fp && fp.length >= 5 && !session.askedQuestionFps.includes(fp)) {
     session.askedQuestionFps.push(fp);
