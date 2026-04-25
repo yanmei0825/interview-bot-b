@@ -4,15 +4,15 @@ import {
   advanceDimension, shouldAdvance, getSessionSummary, updateDimensionMetrics,
   isQuestionAlreadyAsked, registerQuestion,
 } from "../session";
-import { classifyInput, getGuardReply, isDuplicateQuestion, stripEmoji } from "../guards";
+import { classifyInput, getGuardReply, stripEmoji } from "../guards";
 import { getLLMReply } from "../llm";
-import { extractSignals, detectSentiment, isReplyDuplicate } from "../prompt";
+import { extractSignals, detectSentiment } from "../prompt";
 import { validateReply } from "../replyValidator";
 import { Language, InterviewSession, DimensionKey } from "../types";
 import { getDimension, DIMENSION_ORDER } from "../dimensions";
 import { getProject } from "../store";
 import { speechToText, textToSpeech, TTSOptions } from "../voice";
-import { analyzeVoiceInput, assessVoiceQuality, tokenizeText, enforceCharacterLimit } from "../voice-processor";
+import { analyzeVoiceInput, assessVoiceQuality, enforceCharacterLimit } from "../voice-processor";
 import * as fs from "fs";
 import * as path from "path";
 

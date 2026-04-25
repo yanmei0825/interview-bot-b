@@ -299,12 +299,3 @@ export function getGuardReply(cls: InputType, lang: Language): string {
   const pool = GUARD_POOLS[cls][lang];
   return pool[Math.floor(Math.random() * pool.length)] ?? pool[0] ?? "";
 }
-
-export const GUARD_REPLIES: Record<InputType, Record<Language, string>> = Object.fromEntries(
-  (Object.keys(GUARD_POOLS) as InputType[]).map((cls) => [
-    cls,
-    Object.fromEntries(
-      (["en", "ru", "tr"] as Language[]).map((lang) => [lang, GUARD_POOLS[cls][lang][0] ?? ""])
-    ),
-  ])
-) as Record<InputType, Record<Language, string>>;

@@ -171,25 +171,6 @@ function detectEmotion(text: string, language: Language): "neutral" | "happy" | 
   return (maxEmotion[1] > 0 ? maxEmotion[0] : "neutral") as any;
 }
 
-export function normalizeText(text: string, language: Language): string {
-  let normalized = text.trim();
-
-  normalized = normalized.replace(/\s+/g, " ");
-
-  if (language === "ru") {
-    normalized = normalized.replace(/ё/g, "е");
-  } else if (language === "tr") {
-    normalized = normalized.toLowerCase();
-  } else {
-    normalized = normalized.toLowerCase();
-  }
-
-  normalized = normalized.replace(/^[.,!?;:]+|[.,!?;:]+$/g, "");
-
-  return normalized;
-}
-
-
 export interface CharacterLimitResult {
   original: string;
   truncated: string;

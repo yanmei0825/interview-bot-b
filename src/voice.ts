@@ -58,32 +58,6 @@ export async function speechToText(
   }
 }
 
-/**
- * Stream speech-to-text for real-time transcription
- */
-export async function* streamSpeechToText(
-  audioStream: ReadableStream<Uint8Array>,
-  language: Language,
-  provider: STTProvider = getDefaultSTTProvider()
-): AsyncGenerator<STTResult> {
-  switch (provider.name) {
-    case "google":
-      yield* streamSpeechToTextGoogle(audioStream, language, provider);
-      break;
-    case "azure":
-      yield* streamSpeechToTextAzure(audioStream, language, provider);
-      break;
-    case "aws":
-      yield* streamSpeechToTextAWS(audioStream, language, provider);
-      break;
-    case "openai":
-      yield* streamSpeechToTextOpenAI(audioStream, language, provider);
-      break;
-    default:
-      throw new Error(`Unknown STT provider: ${provider.name}`);
-  }
-}
-
 export interface TTSProvider {
   name: "google" | "azure" | "aws" | "openai" | "elevenlabs";
   apiKey: string;
@@ -128,50 +102,6 @@ export async function textToSpeech(
     default:
       throw new Error(`Unknown TTS provider: ${provider.name}`);
   }
-}
-
-/**
- * Stream text-to-speech for real-time audio
- */
-export async function* streamTextToSpeech(
-  text: string,
-  language: Language,
-  options: TTSOptions = {},
-  provider: TTSProvider = getDefaultTTSProvider()
-): AsyncGenerator<Uint8Array> {
-  switch (provider.name) {
-    case "google":
-      yield* streamTextToSpeechGoogle(text, language, options, provider);
-      break;
-    case "azure":
-      yield* streamTextToSpeechAzure(text, language, options, provider);
-      break;
-    case "aws":
-      yield* streamTextToSpeechAWS(text, language, options, provider);
-      break;
-    case "openai":
-      yield* streamTextToSpeechOpenAI(text, language, options, provider);
-      break;
-    case "elevenlabs":
-      yield* streamTextToSpeechElevenLabs(text, language, options, provider);
-      break;
-    default:
-      throw new Error(`Unknown TTS provider: ${provider.name}`);
-  }
-}
-
-export async function detectLanguageFromAudio(
-  audioBuffer: ArrayBuffer
-): Promise<Language> {
-  const result = await speechToText(audioBuffer, "en");
-  return result.language;
-}
-
-export interface VoiceQuality {
-  noiseLevel: number;
-  clarity: number; 
-  volume: number; 
-  isAcceptable: boolean;
 }
 
 async function speechToTextAssemblyAI(

@@ -1,6 +1,6 @@
 import { InterviewSession, DimensionKey } from "./types";
 import { DIMENSION_ORDER, getDimension } from "./dimensions";
-import { getAllSessionsByProject, getEventsByProject, getSession } from "./session";
+import { getAllSessionsByProject, getEventsByProject } from "./session";
 import { listProjectsByCompany } from "./store";
 
 export interface DimensionReport {
