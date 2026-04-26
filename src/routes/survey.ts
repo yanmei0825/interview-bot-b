@@ -351,10 +351,19 @@ async function processMessage(session: InterviewSession, message: string): Promi
       };
       const advanced = advanceDimension(session);
       if (!advanced || session.finished) {
-        const result = enterAwaitFinal(session, lang);
+        // Already at last dimension — resume current D with a probe question instead of looping
+        session.finished = false;
+        session.state = "INTERVIEW";
+        const dim = getDimension(session.currentDimension);
+        const cov = session.coverage[session.currentDimension];
+        const pool = [...dim.probeQuestions[lang], ...dim.starterQuestions[lang]];
+        const used = new Set(session.history.filter(m => m.role === "assistant").map(m => m.content.trim().toLowerCase().slice(0, 40)));
+        const fresh = pool.find(q => !used.has(q.trim().toLowerCase().slice(0, 40))) ?? pool[cov.turnCount % pool.length]!;
+        const reply = continuePrefix[lang] + fresh;
+        session.history.push({ role: "assistant", content: reply, timestamp: Date.now() });
         await saveSession(session);
-        await logEvent(session.token, "closing_started", `turns=${session.turnCount}`);
-        return result;
+        await logEvent(session.token, "closing_cancelled_resume", session.currentDimension);
+        return { reply, dimension: session.currentDimension, finished: false, guardHit: true };
       }
       const nextQ = getDimension(session.currentDimension).starterQuestions[lang][0]!;
       const reply = continuePrefix[lang] + nextQ;
