@@ -332,6 +332,32 @@ async function resolveNextQuestion(session: InterviewSession, lang: Language): P
 async function processMessage(session: InterviewSession, message: string): Promise<ProcessResult> {
   const lang = session.language!;
 
+  // ── If session is fully done but user says continue — reopen it ──────────
+  if (session.finished && session.closingStage === "done") {
+    const cls = classifyInput(message, lang);
+    if (cls === "continue_request") {
+      session.closingStage = "";
+      session.finished = false;
+      session.state = "INTERVIEW";
+      await logEvent(session.token, "closing_cancelled", message.slice(0, 80));
+      session.history.push({ role: "user", content: message, timestamp: Date.now() });
+      const continuePrefix: Record<Language, string> = {
+        en: "Sure, let's keep going.\n\n",
+        ru: "Окей, идём дальше.\n\n",
+        tr: "Tamam, devam edelim.\n\n",
+      };
+      const dim = getDimension(session.currentDimension);
+      const cov = session.coverage[session.currentDimension];
+      const pool = [...dim.probeQuestions[lang], ...dim.starterQuestions[lang]];
+      const used = new Set(session.history.filter(m => m.role === "assistant").map(m => m.content.trim().toLowerCase().slice(0, 40)));
+      const fresh = pool.find(q => !used.has(q.trim().toLowerCase().slice(0, 40))) ?? pool[cov.turnCount % pool.length]!;
+      const reply = continuePrefix[lang] + fresh;
+      session.history.push({ role: "assistant", content: reply, timestamp: Date.now() });
+      await saveSession(session);
+      return { reply, dimension: session.currentDimension, finished: false, guardHit: true };
+    }
+  }
+
   // ── Two-phase closing: intercept await_final before anything else ──────────
   if (session.closingStage === "await_final") {
     const cls = classifyInput(message, lang);
