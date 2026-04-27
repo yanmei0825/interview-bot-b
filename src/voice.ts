@@ -82,10 +82,21 @@ export async function speechToText(
     file,
     model: "whisper-1",
     language,
+    response_format: "verbose_json",
   });
 
+  const detectedLang = (response as any).language ?? null;
+  const text = response.text ?? "";
+
+  // If Whisper detected a different language than expected, reject the transcription
+  const LANG_MAP: Record<string, string> = { russian: "ru", english: "en", turkish: "tr" };
+  const mappedDetected = detectedLang ? (LANG_MAP[detectedLang.toLowerCase()] ?? detectedLang.slice(0, 2)) : null;
+  if (mappedDetected && mappedDetected !== language) {
+    return { text: "", confidence: 0, language, duration: estimatedDurationMs, isFinal: true };
+  }
+
   return {
-    text: (response.text && !isHallucination(response.text)) ? response.text : "",
+    text: (text && !isHallucination(text)) ? text : "",
     confidence: 0.95,
     language,
     duration: (audioBuffer.byteLength / 32000) * 1000,
