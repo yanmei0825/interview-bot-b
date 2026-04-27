@@ -228,9 +228,7 @@ async function handleGuardedInput(
   }
 
   if (inputClass === "too_long") {
-    cov.turnCount++;
-    session.turnCount++;
-    updateDimensionMetrics(session);
+    // Do NOT increment turnCount — too_long is not a substantive turn
     pushHistory(processedMessage.slice(0, 200) + "...", guardReply);
     return done(guardReply);
   }
