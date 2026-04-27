@@ -4,7 +4,7 @@ import {
   advanceDimension, shouldAdvance, getSessionSummary, updateDimensionMetrics,
   isQuestionAlreadyAsked, registerQuestion,
 } from "../session";
-import { classifyInput, getGuardReply, stripEmoji } from "../guards";
+import { classifyInput, getGuardReply, stripEmoji, detectLanguage } from "../guards";
 import { getLLMReply, getLLMReAsk } from "../llm";
 import { extractSignals, detectSentiment, detectBurnout } from "../prompt";
 import { validateReply } from "../replyValidator";
@@ -77,11 +77,10 @@ router.post("/:token/voice/transcribe", requireSession, requireLanguage, async (
 
       // Check if transcribed text is in the wrong language
       if (text) {
-        const { detectLanguage } = await import("../guards");
         const detected = detectLanguage(text);
         if (detected !== null && detected !== session.language) {
           wrongLanguage = true;
-          text = ""; // don't send wrong-language text to the interview
+          text = "";
           await logEvent(session.token, "voice_wrong_language", `detected=${detected} expected=${session.language}`, session.currentDimension);
         }
       }
