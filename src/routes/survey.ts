@@ -75,8 +75,15 @@ router.post("/:token/voice/transcribe", requireSession, requireLanguage, async (
       const result = await speechToText(audioBuffer as unknown as ArrayBuffer, session.language!);
       text = result.text ?? "";
 
-      // Check if transcribed text is in the wrong language
-      if (text) {
+      // Use wrongLanguage flag from Whisper's own language detection first
+      if (result.wrongLanguage) {
+        wrongLanguage = true;
+        text = "";
+        await logEvent(session.token, "voice_wrong_language", `whisper_detected_mismatch expected=${session.language}`, session.currentDimension);
+      }
+
+      // Also check if transcribed text is in the wrong language (catches cases Whisper missed)
+      if (!wrongLanguage && text) {
         const detected = detectLanguage(text);
         if (detected !== null && detected !== session.language) {
           wrongLanguage = true;

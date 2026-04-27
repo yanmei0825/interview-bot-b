@@ -14,6 +14,7 @@ export interface STTResult {
   language: Language;
   duration: number;
   isFinal: boolean;
+  wrongLanguage?: boolean;
 }
 
 export interface TTSResult {
@@ -92,7 +93,7 @@ export async function speechToText(
   const LANG_MAP: Record<string, string> = { russian: "ru", english: "en", turkish: "tr" };
   const mappedDetected = detectedLang ? (LANG_MAP[detectedLang.toLowerCase()] ?? detectedLang.slice(0, 2)) : null;
   if (mappedDetected && mappedDetected !== language) {
-    return { text: "", confidence: 0, language, duration: estimatedDurationMs, isFinal: true };
+    return { text: "", confidence: 0, language, duration: estimatedDurationMs, isFinal: true, wrongLanguage: true };
   }
 
   return {
@@ -101,6 +102,7 @@ export async function speechToText(
     language,
     duration: (audioBuffer.byteLength / 32000) * 1000,
     isFinal: true,
+    wrongLanguage: false,
   };
 }
 
