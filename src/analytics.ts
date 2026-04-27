@@ -1,4 +1,4 @@
-import { DimensionKey } from "./types";
+﻿import { DimensionKey } from "./types";
 import { DIMENSION_ORDER, getDimension } from "./dimensions";
 import { getAllSessionsByProject, getEventsByProject } from "./session";
 import { listProjectsByCompany, getCompany } from "./store";
@@ -244,17 +244,17 @@ function generateKeyInsights(
 ): string[] {
   const insights: string[] = [];
   const highRiskDims = Object.values(dimensions).filter((d) => d.riskLevel === "high");
-  if (highRiskDims.length > 0) insights.push(`⚠️ High-risk areas: ${highRiskDims.map((d) => d.name).join(", ")}. Recommend immediate attention.`);
+  if (highRiskDims.length > 0) insights.push(`âš ï¸ High-risk areas: ${highRiskDims.map((d) => d.name).join(", ")}. Recommend immediate attention.`);
   const strongDims = Object.values(dimensions).filter((d) => d.avgDepthScore >= 70 && d.avgCoveragePercent >= 80);
-  if (strongDims.length > 0) insights.push(`✓ Strong areas: ${strongDims.map((d) => d.name).join(", ")}. Maintain current practices.`);
+  if (strongDims.length > 0) insights.push(`âœ“ Strong areas: ${strongDims.map((d) => d.name).join(", ")}. Maintain current practices.`);
   const negativeCount = Object.values(dimensions).filter((d) => d.sentimentTrend === "negative").length;
-  if (negativeCount >= 4) insights.push(`⚠️ Negative sentiment in ${negativeCount} dimensions. Consider engagement initiatives.`);
+  if (negativeCount >= 4) insights.push(`âš ï¸ Negative sentiment in ${negativeCount} dimensions. Consider engagement initiatives.`);
   const lowCoverage = Object.values(dimensions).filter((d) => d.avgCoveragePercent < 50);
-  if (lowCoverage.length > 0) insights.push(`📊 Coverage gaps in: ${lowCoverage.map((d) => d.name).join(", ")}.`);
+  if (lowCoverage.length > 0) insights.push(`ðŸ“Š Coverage gaps in: ${lowCoverage.map((d) => d.name).join(", ")}.`);
   const lowProjects = projects.filter((p) => p.completionRate < 50);
-  if (lowProjects.length > 0) insights.push(`📉 ${lowProjects.length} project(s) have low completion rates.`);
-  if (overallDepthScore >= 70) insights.push(`✓ Overall depth score is strong (${overallDepthScore}/100).`);
-  else if (overallDepthScore < 40) insights.push(`⚠️ Overall depth score is low (${overallDepthScore}/100).`);
+  if (lowProjects.length > 0) insights.push(`ðŸ“‰ ${lowProjects.length} project(s) have low completion rates.`);
+  if (overallDepthScore >= 70) insights.push(`âœ“ Overall depth score is strong (${overallDepthScore}/100).`);
+  else if (overallDepthScore < 40) insights.push(`âš ï¸ Overall depth score is low (${overallDepthScore}/100).`);
   return insights.slice(0, 5);
 }
 
@@ -415,3 +415,4 @@ export async function generateComparisonAnalysis(projectId: string): Promise<Com
     generatedAt: Date.now(),
   };
 }
+
