@@ -96,8 +96,16 @@ export async function speechToText(
     return { text: "", confidence: 0, language, duration: estimatedDurationMs, isFinal: true, wrongLanguage: true };
   }
 
+  const finalText = (text && !isHallucination(text)) ? text : "";
+
+  // Even if Whisper reported the correct language, verify the transcribed text script matches.
+  // Whisper sometimes force-transcribes wrong-language speech and still reports the expected language.
+  if (finalText && isWrongLanguage(finalText, language)) {
+    return { text: "", confidence: 0, language, duration: estimatedDurationMs, isFinal: true, wrongLanguage: true };
+  }
+
   return {
-    text: (text && !isHallucination(text)) ? text : "",
+    text: finalText,
     confidence: 0.95,
     language,
     duration: (audioBuffer.byteLength / 32000) * 1000,
