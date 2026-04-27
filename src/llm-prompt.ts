@@ -96,6 +96,17 @@ export function buildLLMInput(session: InterviewSession, mode: "normal" | "re_as
   };
 }
 
+export const REDIRECT_PHRASES: Record<string, RegExp> = {
+  ru: /Понял\. Давай вернёмся|давай вернёмся — мы говорим о/i,
+  en: /Got it\. Let's stay on track|let's stay on track — we're on/i,
+  tr: /Anladım\. Konuya dönelim|konuya dönelim —/i,
+};
+
+export function isRedirectReply(reply: string, lang: string): boolean {
+  const pattern = REDIRECT_PHRASES[lang];
+  return pattern ? pattern.test(reply) : false;
+}
+
 export function buildSystemPrompt(session: InterviewSession): string {
   const lang = session.language as Language;
   const dim = getDimension(session.currentDimension);

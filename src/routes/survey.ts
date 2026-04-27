@@ -13,6 +13,7 @@ import { Language, InterviewSession, DimensionKey } from "../types";
 import { getDimension, DIMENSION_ORDER } from "../dimensions";
 import { getProject } from "../store";
 import { speechToText, textToSpeech, TTSOptions } from "../voice";
+import { isRedirectReply } from "../llm-prompt";
 
 const router = Router();
 
@@ -278,6 +279,19 @@ async function handleValidInput(
 ): Promise<ProcessResult> {
   const cov = session.coverage[session.currentDimension];
 
+  // Get LLM reply first — if it's a redirect, the answer was off-topic and should NOT count
+  const nextQuestion = await resolveNextQuestion(session, lang);
+  const isOffTopic = isRedirectReply(nextQuestion, lang);
+
+  if (isOffTopic) {
+    // LLM flagged this as off-topic — don't count turn, don't push signals, don't advance
+    session.history.push({ role: "user", content: cleanMessage, timestamp: Date.now() });
+    await logEvent(session.token, "off_topic_detected_by_llm", cleanMessage.slice(0, 80), session.currentDimension);
+    const finalQuestion = safeAddBotQuestion(session, nextQuestion, lang);
+    await saveSession(session);
+    return { reply: finalQuestion, dimension: session.currentDimension, finished: false, guardHit: true };
+  }
+
   cov.signals.push(...extractSignals(cleanMessage, session.currentDimension));
   cov.turnCount++;
   session.turnCount++;
@@ -309,7 +323,6 @@ async function handleValidInput(
     await logEvent(session.token, "dimension_started", session.currentDimension, session.currentDimension);
   }
 
-  const nextQuestion = await resolveNextQuestion(session, lang);
   // Normalize leading ack: fix gendered forms, prevent repetition
   const { reply: normalizedQ, ackUsed } = normalizeLeadingAck(nextQuestion, lang, session.lastAcksUsed ?? []);
   if (ackUsed) {

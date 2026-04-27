@@ -11,10 +11,10 @@ export function detectLanguage(text: string): Language | null {
 
   if (total === 0) return null;
 
-  // require at least 30% of letter chars to be from that script
-  if (cyrillic / total >= 0.3) return "ru";
-  if (turkish  / total >= 0.3) return "tr";
-  if (latin    / total >= 0.3) return "en";
+  // require at least 20% of letter chars to be from that script (lowered from 30% for better detection)
+  if (cyrillic / total >= 0.2) return "ru";
+  if (turkish  / total >= 0.2) return "tr";
+  if (latin    / total >= 0.2) return "en";
   return null;
 }
 
@@ -40,6 +40,8 @@ export type InputType =
 
 const MIN_CHARS = 2;
 const MAX_CHARS = 1200;
+// Minimum meaningful words for a substantive answer
+const MIN_WORDS = 3;
 
 const EMOJI_RE = /[\u{1F000}-\u{1FFFF}\u{2600}-\u{27FF}\u{FE00}-\u{FEFF}\u{200D}\u{20E3}\u{FE0F}]+/gu;
 
@@ -148,6 +150,10 @@ export function classifyInput(text: string, lang: Language): InputType {
   if (isWrongLanguage(clean, lang)) return "wrong_language";
 
   if (hadEmoji) return "emoji_mixed";
+
+  // Answers with fewer than MIN_WORDS meaningful words are too vague to be substantive
+  const wordCount = clean.trim().split(/\s+/).filter(w => w.length > 1).length;
+  if (wordCount < MIN_WORDS) return "too_short";
 
   return "valid_answer";
 }
