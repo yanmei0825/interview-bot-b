@@ -70,18 +70,32 @@ router.post("/:token/voice/transcribe", requireSession, requireLanguage, async (
     }
 
     let text = "";
+    let wrongLanguage = false;
     try {
       const result = await speechToText(audioBuffer as unknown as ArrayBuffer, session.language!);
       text = result.text ?? "";
-      await logEvent(session.token, "voice_transcribed", text.slice(0, 80), session.currentDimension);
-      session.history.push({ role: "user", content: text, timestamp: Date.now() });
-      await saveSession(session);
+
+      // Check if transcribed text is in the wrong language
+      if (text) {
+        const { detectLanguage } = await import("../guards");
+        const detected = detectLanguage(text);
+        if (detected !== null && detected !== session.language) {
+          wrongLanguage = true;
+          text = ""; // don't send wrong-language text to the interview
+          await logEvent(session.token, "voice_wrong_language", `detected=${detected} expected=${session.language}`, session.currentDimension);
+        }
+      }
+
+      if (text) {
+        await logEvent(session.token, "voice_transcribed", text.slice(0, 80), session.currentDimension);
+        session.history.push({ role: "user", content: text, timestamp: Date.now() });
+        await saveSession(session);
+      }
     } catch (err: any) {
       console.error("[Voice Transcribe Error]", err?.message ?? err, err?.stack);
-      // Return empty text — frontend will treat this as __skip__
     }
 
-    return res.json({ text, confidence: 0.95, language: session.language, duration: 0 });
+    return res.json({ text, confidence: 0.95, language: session.language, duration: 0, wrongLanguage });
   } catch (err: any) {
     console.error("[Transcribe] Unhandled error:", err?.message ?? err);
     return res.json({ text: "", confidence: 0, language: session.language, duration: 0 });
