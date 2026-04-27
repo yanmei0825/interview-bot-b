@@ -73,7 +73,8 @@ router.post("/:token/voice/transcribe", requireSession, requireLanguage, async (
     let text = "";
     let wrongLanguage = false;
     try {
-      const result = await speechToText(audioBuffer as unknown as ArrayBuffer, session.language!);
+      const contentType = req.headers["content-type"] ?? "audio/webm";
+      const result = await speechToText(audioBuffer as unknown as ArrayBuffer, session.language!, contentType);
       text = result.text ?? "";
 
       // Use wrongLanguage flag from Whisper's own language detection first

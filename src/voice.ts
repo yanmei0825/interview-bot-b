@@ -67,11 +67,24 @@ function isWrongLanguage(text: string, expected: Language): boolean {
 
 export async function speechToText(
   audioBuffer: ArrayBuffer,
-  language: Language
+  language: Language,
+  contentType = "audio/webm"
 ): Promise<STTResult> {
   const client = getOpenAIClient();
 
-  const file = await toFile(Buffer.from(audioBuffer), "audio.webm", { type: "audio/webm" });
+  // Derive filename extension from content type for Whisper to parse correctly
+  const EXT_MAP: Record<string, string> = {
+    "audio/webm": "audio.webm",
+    "audio/webm;codecs=opus": "audio.webm",
+    "audio/ogg": "audio.ogg",
+    "audio/ogg;codecs=opus": "audio.ogg",
+    "audio/mp4": "audio.mp4",
+    "audio/mpeg": "audio.mp3",
+    "audio/wav": "audio.wav",
+  };
+  const mimeBase = contentType.split(";")[0]!.trim().toLowerCase();
+  const filename = EXT_MAP[mimeBase] ?? EXT_MAP[contentType] ?? "audio.webm";
+  const file = await toFile(Buffer.from(audioBuffer), filename, { type: mimeBase });
 
   // Very short audio (< ~0.3s at typical bitrate) is almost certainly silence
   const estimatedDurationMs = (audioBuffer.byteLength / 16000) * 1000;
@@ -79,34 +92,41 @@ export async function speechToText(
     return { text: "", confidence: 0, language, duration: estimatedDurationMs, isFinal: true };
   }
 
+  // Do NOT pass `language` to Whisper — let it auto-detect.
+  // Forcing the language causes Whisper to transcribe wrong-language speech as garbled text
+  // in the forced language, making detection impossible. Auto-detect is far more reliable.
   const response = await client.audio.transcriptions.create({
     file,
     model: "whisper-1",
-    language,
     response_format: "verbose_json",
   });
 
   const detectedLang = (response as any).language ?? null;
   const text = response.text ?? "";
 
-  // If Whisper detected a different language than expected, reject the transcription
+  // Map Whisper's language name to our language code
   const LANG_MAP: Record<string, string> = { russian: "ru", english: "en", turkish: "tr" };
-  const mappedDetected = detectedLang ? (LANG_MAP[detectedLang.toLowerCase()] ?? detectedLang.slice(0, 2)) : null;
+  const mappedDetected = detectedLang
+    ? (LANG_MAP[detectedLang.toLowerCase()] ?? detectedLang.slice(0, 2).toLowerCase())
+    : null;
+
+  // If Whisper detected a different language than expected, reject immediately
   if (mappedDetected && mappedDetected !== language) {
     return { text: "", confidence: 0, language, duration: estimatedDurationMs, isFinal: true, wrongLanguage: true };
   }
 
   const finalText = (text && !isHallucination(text)) ? text : "";
 
-  // Even if Whisper reported the correct language, verify the transcribed text script matches.
-  // Whisper sometimes force-transcribes wrong-language speech and still reports the expected language.
+  // Secondary check: verify the transcribed text's script matches the expected language.
+  // Catches edge cases where Whisper reports the correct language but transcribes wrong-language
+  // speech phonetically (e.g. Russian words written in Latin characters).
   if (finalText && isWrongLanguage(finalText, language)) {
     return { text: "", confidence: 0, language, duration: estimatedDurationMs, isFinal: true, wrongLanguage: true };
   }
 
   return {
     text: finalText,
-    confidence: 0.95,
+    confidence: mappedDetected === language ? 0.95 : 0.7,
     language,
     duration: (audioBuffer.byteLength / 32000) * 1000,
     isFinal: true,
